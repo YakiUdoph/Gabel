@@ -183,3 +183,13 @@ Created: 2026-11-02. This is the first task record found in the repository and d
 - [x] Verify official Buffer Commit terms: the build window is 2026-10-28 00:01 PT through 2026-11-13 23:59 PT, and pre-existing projects are allowed only when new in-window functionality is clearly identified.
 - [x] Record filesystem metadata as supporting but non-authoritative evidence: 33 of 42 intended files have in-window modification timestamps, while nine retain only pre-window timestamps.
 - [x] Create no commit, stage nothing, push nothing, publish nothing, execute no Buffer mutation, deploy nothing, and keep production compliance FAILED.
+
+## P0 secure Git baseline and legitimate initial commit
+
+- [x] Re-read all seven project documents and preserve every available project rule; do not invent the unavailable Serial Hackathon Winner Playbook.
+- [x] Expand `.gitignore` for private environment variants, keys/certificates, local databases/runtime data, build output, temporary files, TypeScript build metadata, logs, dependencies, and OS artifacts while keeping `.env.example` trackable.
+- [x] Run value-free worktree and staged-blob secret checks; verify `.env.example` contains blank credential placeholders and triage only code identifiers and deliberately fake security-test fixtures.
+- [x] Dry-run and inspect the proposed 42-file snapshot; exclude `.env`, `certs/`, `data/`, `node_modules/`, and generated or sensitive artifacts.
+- [x] Stage and review the complete 42-file index, confirm no unstaged divergence, and create the truthful root commit `9e444528cc38287aa33579cdca7fb0325436224b` at its actual timestamp, `2026-11-03T14:16:41-01:00`.
+- [x] Record that the initial snapshot does not prove when earlier development occurred and is not fabricated historical competition evidence.
+- [x] Run type checking, unit tests, and integration tests successfully; push nothing, publish nothing, execute no Buffer mutation, deploy nothing, advance no phase, and keep production compliance FAILED.
