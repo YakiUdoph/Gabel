@@ -97,8 +97,8 @@ try {
     .flatMap((rule) => rule.allowedFormats ?? []))].sort();
   const maxMegabytes = imageSizeRules.length ? Math.min(...imageSizeRules.map((rule) => rule.maxMegabytes ?? Number.POSITIVE_INFINITY)) : undefined;
   const declaredMatchesSignature = probe.declaredFormat !== 'unknown' && probe.declaredFormat === probe.detectedFormat;
-  const formatKnownToLiveSchema = probe.detectedFormat !== 'unknown' && liveMediaFormats.includes(probe.detectedFormat);
-  const formatSupported = allowedFormats.length && probe.detectedFormat !== 'unknown'
+  const formatKnownToLiveSchema = typeof probe.detectedFormat === 'string' && probe.detectedFormat !== 'unknown' && liveMediaFormats.includes(probe.detectedFormat);
+  const formatSupported = allowedFormats.length && typeof probe.detectedFormat === 'string' && probe.detectedFormat !== 'unknown'
     ? allowedFormats.includes(probe.detectedFormat) : undefined;
   const sizeKnown = probe.fileSizeBytes != null;
   const sizeWithinLimit = sizeKnown && maxMegabytes != null ? probe.fileSizeBytes! <= maxMegabytes * 1_000_000 : undefined;

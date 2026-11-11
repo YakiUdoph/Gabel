@@ -4,10 +4,13 @@ import { decrypt, encrypt, pkceChallenge, randomToken, sha256 } from './security
 
 export const BUFFER_SCOPES = ['account:read', 'posts:read', 'posts:write', 'offline_access'] as const;
 
-export function beginOAuth(store: Store, config: Config, sessionHash: string): { url: string; state: string; verifier: string } {
+export type OAuthReconnect = { connectionId: string; expectedTokenVersion: number };
+export type ConsumedOAuth = { verifier: string; reconnect?: OAuthReconnect };
+
+export function beginOAuth(store: Store, config: Config, sessionHash: string, reconnect?: OAuthReconnect): { url: string; state: string; verifier: string } {
   const state = randomToken(32);
   const verifier = randomToken(64);
-  store.setOAuthSession(sessionHash, sha256(state), encrypt(verifier, config.encryptionKey), new Date(Date.now() + 10 * 60_000).toISOString());
+  store.setOAuthSession(sessionHash, sha256(state), encrypt(verifier, config.encryptionKey), new Date(Date.now() + 10 * 60_000).toISOString(), reconnect);
   const url = new URL('https://auth.buffer.com/auth');
   url.search = new URLSearchParams({
     client_id: config.bufferClientId,
@@ -22,8 +25,12 @@ export function beginOAuth(store: Store, config: Config, sessionHash: string): {
   return { url: url.toString(), state, verifier };
 }
 
-export function consumeOAuth(store: Store, config: Config, sessionHash: string, returnedState: string): string | undefined {
+export function consumeOAuth(store: Store, config: Config, sessionHash: string, returnedState: string): ConsumedOAuth | undefined {
   if (!returnedState) return undefined;
   const row = store.consumeOAuthSession(sessionHash, sha256(returnedState));
-  return row ? decrypt(row.pkce_verifier_ciphertext, config.encryptionKey) : undefined;
+  return row ? {
+    verifier: decrypt(row.pkce_verifier_ciphertext, config.encryptionKey),
+    ...(row.connection_id && row.expected_token_version != null
+      ? { reconnect: { connectionId: row.connection_id, expectedTokenVersion: row.expected_token_version } } : {}),
+  } : undefined;
 }

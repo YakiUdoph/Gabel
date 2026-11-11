@@ -3,17 +3,25 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24.0.0" },
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "scripts": {
     "dev": "node --env-file=.env --watch --experimental-strip-types src/server.ts",
     "start": "node --env-file=.env --experimental-strip-types src/server.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "integration": "node --experimental-strip-types --test test/integration/*.test.ts",
+    "browser": "node --experimental-strip-types scripts/verify-product-browser.ts",
+    "production:check": "node --experimental-strip-types scripts/check-production-readiness.ts",
     "typecheck": "tsc --noEmit",
-    "verify:buffer:readonly": "node --env-file=.env --experimental-strip-types scripts/verify-buffer-readonly.ts"
+    "fixture:dev:available": "wrangler dev --local --config tooling/cloudflare-workers-media/wrangler.available.jsonc",
+    "fixture:dev:revoked": "wrangler dev --local --config tooling/cloudflare-workers-media/wrangler.revoked.jsonc",
+    "verify:buffer:readonly": "node --env-file=.env --experimental-strip-types scripts/verify-buffer-readonly.ts",
+    "controlled:post": "node --env-file=.env --experimental-strip-types scripts/controlled-buffer-post.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "wrangler": "^4.157.0"
   }
 }

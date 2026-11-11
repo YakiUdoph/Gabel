@@ -4,8 +4,10 @@ import type { Store } from './db.ts';
 import { decrypt, encrypt, sanitize } from './security.ts';
 import type { BufferPost, DbConnection, GraphQlEnvelope, TokenResponse } from './types.ts';
 
+export type BufferErrorKind = 'http' | 'graphql' | 'auth' | 'rate_limit' | 'network' | 'timeout' | 'invalid_response';
+
 export class BufferError extends Error {
-  readonly kind: 'http' | 'graphql' | 'auth' | 'rate_limit' | 'network' | 'invalid_response';
+  readonly kind: BufferErrorKind;
   readonly details: unknown;
   readonly requestId?: string;
   readonly retryAfter?: number;
@@ -13,7 +15,7 @@ export class BufferError extends Error {
   readonly operationName?: string;
   constructor(
     message: string,
-    kind: 'http' | 'graphql' | 'auth' | 'rate_limit' | 'network' | 'invalid_response',
+    kind: BufferErrorKind,
     details: unknown = undefined,
     requestId?: string,
     retryAfter?: number,
@@ -50,12 +52,44 @@ type FetchLike = typeof fetch;
 type GqlResult<T> = { data: T; requestId?: string };
 const refreshes = new Map<string, Promise<string>>();
 
+const TIMEOUT_CODES = new Set(['ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']);
+const DNS_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN']);
+const PERMISSION_CODES = new Set(['EACCES', 'EPERM']);
+
+function transportCode(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const candidate = value as { code?: unknown; cause?: { code?: unknown } };
+  return typeof candidate.code === 'string' ? candidate.code
+    : typeof candidate.cause?.code === 'string' ? candidate.cause.code : undefined;
+}
+
+export function classifyBufferTransportFailure(error: unknown): { kind: 'network' | 'timeout'; details: Record<string, string> } {
+  const candidate = error && typeof error === 'object' ? error as { name?: unknown } : undefined;
+  const name = typeof candidate?.name === 'string' ? candidate.name : undefined;
+  const code = transportCode(error);
+  const timeout = name === 'TimeoutError' || name === 'AbortError' || (code != null && TIMEOUT_CODES.has(code));
+  const category = timeout ? 'timeout'
+    : code != null && DNS_CODES.has(code) ? 'dns'
+    : code != null && PERMISSION_CODES.has(code) ? 'permission'
+    : code?.includes('CERT') || code?.includes('TLS') ? 'tls'
+    : 'network';
+  return {
+    kind: timeout ? 'timeout' : 'network',
+    details: Object.fromEntries([
+      ['category', category],
+      ['errorName', name],
+      ['code', code],
+    ].filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
+  };
+}
+
 function isTokenResponse(value: unknown): value is TokenResponse {
   const v = value as Partial<TokenResponse>;
   return !!v && typeof v.access_token === 'string' && typeof v.expires_in === 'number' && v.token_type === 'Bearer' && typeof v.scope === 'string';
 }
 
-export async function tokenRequest(config: Config, body: URLSearchParams, fetcher: FetchLike = fetch): Promise<TokenResponse> {
+export async function tokenRequest(config: Config, body: URLSearchParams, fetcher: FetchLike = fetch,
+  operationName = 'BufferTokenRequest'): Promise<TokenResponse> {
   if (config.bufferClientSecret) body.set('client_secret', config.bufferClientSecret);
   let response: Response;
   try {
@@ -64,13 +98,16 @@ export async function tokenRequest(config: Config, body: URLSearchParams, fetche
       signal: AbortSignal.timeout(config.requestTimeoutMs),
     });
   } catch (error) {
-    throw new BufferError('Buffer token endpoint could not be reached', 'network', sanitize(error));
+    const failure = classifyBufferTransportFailure(error);
+    throw new BufferError(failure.kind === 'timeout' ? 'Buffer token endpoint timed out' : 'Buffer token endpoint could not be reached',
+      failure.kind, failure.details, undefined, undefined, undefined, operationName);
   }
   const json: unknown = await response.json().catch(() => null);
   if (!response.ok || !isTokenResponse(json)) {
     const oauthError = (json as { error?: string } | null)?.error;
     const kind = response.status === 401 || oauthError === 'invalid_grant' || oauthError === 'invalid_client' ? 'auth' : 'http';
-    throw new BufferError('Buffer rejected the token request', kind, sanitize(json));
+    const requestId = response.headers.get('x-request-id') ?? response.headers.get('request-id') ?? undefined;
+    throw new BufferError('Buffer rejected the token request', kind, sanitize(json), requestId, undefined, response.status, operationName);
   }
   return json;
 }
@@ -82,7 +119,7 @@ export async function exchangeAuthorizationCode(config: Config, code: string, ve
     code,
     redirect_uri: config.bufferRedirectUri,
     code_verifier: verifier,
-  }), fetcher);
+  }), fetcher, 'BufferAuthorizationCode');
 }
 
 export class BufferClient {
@@ -100,29 +137,68 @@ export class BufferClient {
     const running = refreshes.get(connection.id);
     if (running) return running;
     const promise = (async () => {
-      if (!connection.refresh_token_ciphertext) {
-        this.store.requireReauth(connection.id);
-        throw new BufferError('No refresh token is available; reauthorization is required', 'auth');
-      }
       const current = this.store.getConnection(connection.tenant_id, connection.id);
       if (!current) throw new BufferError('Connection no longer exists', 'auth');
       if (current.token_version !== connection.token_version || (!force && Date.parse(current.access_expires_at) > Date.now() + 60_000)) {
         return decrypt(current.access_token_ciphertext, this.config.encryptionKey);
+      }
+      if (!current.refresh_token_ciphertext) {
+        this.store.requireReauthIfVersion(current.id, current.token_version);
+        throw new BufferError('No refresh token is available; reauthorization is required', 'auth');
+      }
+      const ownerId = randomUUID();
+      const claimTime = new Date();
+      const claim = this.store.acquireTokenRefreshClaim(current.id, current.token_version, ownerId, claimTime,
+        new Date(claimTime.getTime() + 10_000));
+      if (claim === 'newer_tokens') {
+        const newer = this.store.getConnection(connection.tenant_id, connection.id);
+        if (newer?.status === 'active' && newer.token_version > current.token_version) {
+          return decrypt(newer.access_token_ciphertext, this.config.encryptionKey);
+        }
+        throw new BufferError('Newer Buffer credentials are unavailable; reauthorization is required', 'auth');
+      }
+      if (claim === 'expired_uncertain') {
+        this.store.requireReauthIfVersion(current.id, current.token_version);
+        throw new BufferError('A prior token refresh may have consumed the single-use token; automatic replay is disabled', 'auth');
+      }
+      if (claim !== 'acquired') {
+        const deadline = Date.now() + this.config.requestTimeoutMs + 5_000;
+        while (Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          const newer = this.store.getConnection(connection.tenant_id, connection.id);
+          if (!newer) throw new BufferError('Connection no longer exists', 'auth');
+          if (newer.token_version > current.token_version) {
+            if (newer.status !== 'active') throw new BufferError('Buffer reauthorization is required', 'auth');
+            return decrypt(newer.access_token_ciphertext, this.config.encryptionKey);
+          }
+        }
+        throw new BufferError('Another process is refreshing this connection; no second token request was sent', 'auth');
+      }
+      const requestTime = new Date();
+      if (!this.store.startTokenRefresh(current.id, current.token_version, ownerId, requestTime,
+        new Date(requestTime.getTime() + this.config.requestTimeoutMs + 5_000))) {
+        throw new BufferError('Token refresh claim was lost before the request; no token request was sent', 'auth');
       }
       try {
         const tokens = await tokenRequest(this.config, new URLSearchParams({
           client_id: this.config.bufferClientId,
           grant_type: 'refresh_token',
           refresh_token: decrypt(current.refresh_token_ciphertext!, this.config.encryptionKey),
-        }), this.fetcher);
+        }), this.fetcher, 'BufferTokenRefresh');
         if (!tokens.refresh_token) throw new BufferError('Refresh response omitted the required rotated refresh token', 'invalid_response');
-        const saved = this.store.rotateTokens(current.id, current.token_version,
-          encrypt(tokens.access_token, this.config.encryptionKey), encrypt(tokens.refresh_token, this.config.encryptionKey),
-          new Date(Date.now() + tokens.expires_in * 1000).toISOString(), tokens.scope);
-        if (!saved) throw new BufferError('Token rotation raced with another process; refusing to reuse the single-use token', 'auth');
+        const saved = this.store.commitTokenRefresh({ connectionId: current.id, expectedVersion: current.token_version, ownerId,
+          access: encrypt(tokens.access_token, this.config.encryptionKey), refresh: encrypt(tokens.refresh_token, this.config.encryptionKey),
+          expiresAt: new Date(Date.now() + tokens.expires_in * 1000).toISOString(), scopes: tokens.scope });
+        if (!saved) {
+          const newer = this.store.getConnection(connection.tenant_id, connection.id);
+          if (newer?.status === 'active' && newer.token_version > current.token_version) {
+            return decrypt(newer.access_token_ciphertext, this.config.encryptionKey);
+          }
+          throw new BufferError('Token rotation lost its fenced compare-and-swap; newer credentials were not overwritten', 'auth');
+        }
         return tokens.access_token;
       } catch (error) {
-        if (error instanceof BufferError && error.kind === 'auth') this.store.requireReauth(current.id);
+        this.store.markTokenRefreshAmbiguous(current.id, current.token_version, ownerId);
         throw error;
       }
     })().finally(() => refreshes.delete(connection.id));
@@ -147,7 +223,10 @@ export class BufferClient {
         signal: AbortSignal.timeout(this.config.requestTimeoutMs),
       });
     } catch (error) {
-      throw new BufferError('Buffer API request timed out or failed before a response was received', 'network', sanitize(error), undefined, undefined, undefined, operationName);
+      const failure = classifyBufferTransportFailure(error);
+      throw new BufferError(failure.kind === 'timeout' ? 'Buffer API request timed out before a response was received'
+        : 'Buffer API request failed before a response was received', failure.kind, failure.details,
+      undefined, undefined, undefined, operationName);
     }
     const requestId = response.headers.get('x-request-id') ?? response.headers.get('request-id') ?? undefined;
     const envelope = await response.json().catch(() => null) as GraphQlEnvelope<T> | null;

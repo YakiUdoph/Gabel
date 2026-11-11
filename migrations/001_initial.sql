@@ -1,5 +1,11 @@
 PRAGMA foreign_keys = ON;
 
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version INTEGER PRIMARY KEY,
+  applied_at TEXT NOT NULL
+);
+INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, '2026-11-06T00:00:00.000Z');
+
 CREATE TABLE IF NOT EXISTS tenants (
   id TEXT PRIMARY KEY,
   created_at TEXT NOT NULL
@@ -73,6 +79,19 @@ CREATE TABLE IF NOT EXISTS posts (
   PRIMARY KEY(tenant_id, id)
 );
 CREATE INDEX IF NOT EXISTS idx_posts_tenant_channel ON posts(tenant_id, channel_id);
+
+CREATE TABLE IF NOT EXISTS post_media_checks (
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  connection_id TEXT NOT NULL REFERENCES buffer_connections(id) ON DELETE CASCADE,
+  post_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('ready','confirmed_problem','could_not_verify','unsupported_file')),
+  checked_count INTEGER NOT NULL,
+  summary_json TEXT NOT NULL,
+  request_id TEXT,
+  checked_at TEXT NOT NULL,
+  PRIMARY KEY(tenant_id, post_id)
+);
+CREATE INDEX IF NOT EXISTS idx_media_checks_connection ON post_media_checks(tenant_id, connection_id, checked_at);
 
 CREATE TABLE IF NOT EXISTS assets (
   tenant_id TEXT NOT NULL,

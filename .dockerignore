@@ -1,0 +1,15 @@
+.git
+.env
+.env.*
+!.env.example
+node_modules
+data
+certs
+docs/screenshots
+*.db*
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+*.log

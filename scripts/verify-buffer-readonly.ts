@@ -32,19 +32,22 @@ const config: Config = {
   privacyEmail: 'not-used@example.invalid',
 };
 
+const argument = (name: string): string | undefined => process.argv
+  .find((value) => value.startsWith(`${name}=`))?.slice(name.length + 1);
+const tenantId = argument('--tenant-id') ?? process.env.GABEL_VERIFY_TENANT_ID;
+if (!tenantId?.trim()) {
+  throw new Error('Set --tenant-id=<authenticated tenant> or GABEL_VERIFY_TENANT_ID for tenant-scoped verification');
+}
+
 const store = new Store(config.databasePath);
 try {
-  const connections: Array<{ id: string; tenant_id: string; buffer_account_id: string }> =
-    store.db.prepare(`SELECT id,tenant_id,buffer_account_id FROM buffer_connections WHERE status='active' ORDER BY created_at`).all() as never;
-  if (connections.length !== 1) throw new Error(`Read-only verification requires exactly one active connection; found ${connections.length}`);
-  const connection = connections[0];
+  const connection = store.requireAuthenticatedTenantConnection(tenantId);
   const client = new BufferClient(config, store);
   const identity = await client.graphql<{ account: { id: string } }>(connection.tenant_id, connection.id,
     'query GabelLiveAccountIdentity { account { id } }');
   const discovery = await client.discover(connection.tenant_id, connection.id);
   const assets = discovery.posts.flatMap((post) => post.assets);
   const mediaResults = await Promise.all(assets.slice(0, 10).map((asset) => probeMediaUrl(asset.source)));
-  const argument = (name: string): string | undefined => process.argv.find((value) => value.startsWith(`${name}=`))?.slice(name.length + 1);
   const expectedOrganization = argument('--expected-organization') ?? process.env.EXPECTED_BUFFER_ORGANIZATION;
   const expectedChannel = argument('--expected-channel') ?? process.env.EXPECTED_BUFFER_CHANNEL;
   const discoveredChannels = discovery.organizations.flatMap((organization) => organization.channels);

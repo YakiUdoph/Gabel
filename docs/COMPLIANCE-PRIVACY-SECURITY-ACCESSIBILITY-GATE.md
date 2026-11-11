@@ -94,3 +94,24 @@ The table below reconciles the November 2 findings with current source inspectio
 ## Release decision
 
 This gate remains **FAILED** and is not cleared for production. Stop here. Do not advance to another build phase based on this report.
+
+## 2026-11-07 production-readiness addendum
+
+This addendum preserves the 2026-11-02 audit above while correcting facts that changed later:
+
+- The complete 62-page Serial Hackathon Winner Playbook is available outside the repository and was re-read with unchanged SHA-256 `39bc70b51bec6617b5570827ae7138b8b80e4be65018776f2f2c15a293290377`. Its absence from Git is no longer treated as an unknown-requirements blocker.
+- **LIVE READ-ONLY:** the current tenant-scoped verifier matched the stored Buffer account and retrieved one organization, one channel, one scheduled post, and one image asset; the bounded media probe returned HTTP 206 JPEG. No Buffer mutation or edit intent was sent.
+- **VERIFIED AUTOMATED:** 68/68 unit/security tests, 4/4 isolated integration tests, type checking, and the approved local Chromium harness pass. A point-in-time approved-network npm audit returned zero known advisories.
+- **IMPLEMENTED AND AUTOMATED:** strict production configuration/callback validation, TLS/database preflight, readiness/liveness, sanitized request-failure logging, graceful shutdown, sliding session inactivity, sessionless-tenant credential deletion, HSTS/frame/opener headers, forced-colors CSS, and bounded browser subprocesses.
+- **BLOCKED / NOT TESTED:** Docker image execution because the local Docker daemon is unavailable; real production preflight because no approved public hostname/certificate/contacts/volume exist; manual assistive-technology review; qualified legal review; public deployment/judge access; and authentic live `editPost` preservation evidence.
+
+The current blocker classification and exact deployment procedure are in `docs/PRODUCTION-DEPLOYMENT.md`. Production compliance remains **FAIL**; this addendum does not authorize deployment, submission, OAuth interaction, or a Buffer mutation.
+
+## 2026-11-07 concurrency-hardening addendum
+
+- **VERIFIED AUTOMATED:** edit confirmation now performs an atomic tenant-scoped SQLite claim before fresh validation or mutation-capable work. One intent can have only one durable claim; repeated, concurrent, cross-tenant, and expired confirmations fail closed. A claim is fenced again immediately before `editPost`. Once mutation starts, ambiguous transport or verification outcomes remain durable and cannot be automatically replayed.
+- **VERIFIED AUTOMATED:** token refresh retains the in-process promise lock and adds a durable per-connection SQLite claim. Only the claim owner can mark a refresh request started or commit its response. Credential rotation and claim completion occur in one transaction with a token-version compare-and-swap. Stale refresh responses and stale reauthorization writes cannot overwrite or disable newer credentials.
+- **VERIFIED AUTOMATED:** 73/73 unit/security tests and 5/5 isolated integration tests pass. The adversarial cases include two simultaneous approvals, repeated confirmation, an expired/crashed pre-mutation claim, ambiguous mutation response, cross-tenant and expired intents, independent SQLite refresh contenders, a possibly consumed refresh token, and stale credential writes.
+- **IMPLEMENTED BUT NOT LIVE-TESTED:** no Buffer mutation or real rotating-token race was executed. Multi-process guarantees apply to processes sharing the same local SQLite database. Multi-host/shared-filesystem coordination remains outside the reviewed architecture and still requires a managed coordination/database design before horizontal scaling.
+
+Production compliance remains **FAIL** for the pre-existing infrastructure, legal, manual-accessibility, public-judge, and live-repair blockers. This addendum authorizes no deployment or Buffer mutation.

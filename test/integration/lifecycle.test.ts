@@ -105,3 +105,53 @@ test('isolated retention purge removes expired sessions/intents, stale cache, an
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('retention purge deletes unrecoverable sessionless tenants and encrypted credentials', () => {
+  const { store, directory } = isolatedStore();
+  const expired = randomUUID();
+  const active = randomUUID();
+  const now = new Date('2026-11-07T12:00:00.000Z');
+  try {
+    seed(store, expired, 'expired-connection', '-expired-tenant');
+    seed(store, active, 'active-connection', '-active-tenant');
+    store.db.prepare('UPDATE browser_sessions SET expires_at=? WHERE tenant_id=?')
+      .run(new Date(now.getTime() - 1).toISOString(), expired);
+    store.db.prepare('UPDATE browser_sessions SET expires_at=? WHERE tenant_id=?')
+      .run(new Date(now.getTime() + 60_000).toISOString(), active);
+    store.purgeExpiredData(now);
+    assert.equal((store.db.prepare('SELECT COUNT(*) count FROM tenants WHERE id=?').get(expired) as { count: number }).count, 0);
+    for (const table of ['browser_sessions', 'buffer_connections', 'organizations', 'channels', 'posts', 'edit_intents', 'evidence_events']) {
+      assert.equal(count(store, table, expired), 0, table);
+    }
+    assert.equal(count(store, 'buffer_connections', active), 1);
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('durable edit and refresh claims remain single-owner across SQLite connections', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'gabel-concurrency-'));
+  const databasePath = join(directory, 'gabel.db');
+  const first = new Store(databasePath);
+  let second: Store | undefined;
+  const tenant = randomUUID();
+  try {
+    seed(first, tenant, 'connection', '-concurrency');
+    second = new Store(databasePath);
+    assert.ok(first.claimEditIntent(tenant, 'intent-concurrency', 'post-concurrency', 'edit-worker-one'));
+    assert.equal(second.claimEditIntent(tenant, 'intent-concurrency', 'post-concurrency', 'edit-worker-two'), undefined);
+    assert.equal(first.startEditMutation('intent-concurrency', 'edit-worker-one'), true);
+    assert.equal(second.startEditMutation('intent-concurrency', 'edit-worker-two'), false);
+
+    const now = new Date();
+    assert.equal(first.acquireTokenRefreshClaim('connection', 1, 'refresh-worker-one', now, new Date(now.getTime() + 10_000)), 'acquired');
+    assert.equal(second.acquireTokenRefreshClaim('connection', 1, 'refresh-worker-two', now, new Date(now.getTime() + 10_000)), 'in_progress');
+    assert.equal(first.startTokenRefresh('connection', 1, 'refresh-worker-one', now, new Date(now.getTime() + 10_000)), true);
+    assert.equal(second.startTokenRefresh('connection', 1, 'refresh-worker-two', now, new Date(now.getTime() + 10_000)), false);
+  } finally {
+    second?.close();
+    first.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

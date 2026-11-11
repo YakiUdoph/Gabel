@@ -4,7 +4,31 @@ Created: 2026-11-02 for the Buffer Commit 2026 integration-verification phase. T
 
 ## Mission
 
-Gabel helps a user identify inaccessible media attached to upcoming Buffer posts and safely repair an affected post while keeping the user in control.
+Gabel helps Buffer API and automation users find externally hosted media that becomes unavailable between scheduling and publication. It lets the user review and approve a safe replacement while preserving the rest of the scheduled post.
+
+The current repair path is deliberately narrow: JPEG and PNG image replacements on scheduled X posts. Broader platform or media support is not part of the current product claim.
+
+## Locked product concept
+
+**Gabel — Keep your scheduled posts ready.**
+
+Gabel is a Buffer-native scheduled-media recovery product. Its locked core workflow is **DETECT → REPAIR → VERIFY**. This concept must not be redesigned or diluted with unrelated features.
+
+Work is prioritized in this order:
+
+1. **P0:** complete the separately authorized controlled live repair using a new disposable scheduled post.
+2. **P1:** prove from fresh Buffer evidence that only the approved image changed and every protected post field remained unchanged.
+3. **P2:** turn the feasibility interface into a premium, intuitive, accessible product UI without weakening approval or verification boundaries.
+4. **P3:** verify differentiation against documented Buffer-native capabilities and relevant competitors without unsupported originality claims.
+5. **P4:** complete official competition compliance, deployment, documentation, and submission gates without premature readiness claims.
+
+Before implementation, every proposed feature must directly support this workflow, a competition requirement, security, usability, or release readiness. Otherwise it is out of scope.
+
+## Judge reproducibility
+
+`README.md` must keep a prominent **How to Test Gabel** section immediately after the short product introduction. It must provide separate hosted-judge and local-developer routes, state genuine prerequisites, explain the result labels and approval boundary, and identify anything that is not deployed or not verified live.
+
+The repository must also keep `JUDGE.md` as the practical evaluation guide. Neither document may invent a public URL, sandbox, account, disposable post, credential, mutation, or successful repair. A judge must be directed to a read-only first test and must never be asked to change an important scheduled post.
 
 ## Current acceptance gate
 

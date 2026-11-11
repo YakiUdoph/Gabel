@@ -4,10 +4,11 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Config } from '../src/config.ts';
+import { loadConfig, type Config } from '../src/config.ts';
 import { Store } from '../src/db.ts';
 import { beginOAuth, consumeOAuth } from '../src/oauth.ts';
-import { BufferClient, BufferError, graphqlOperationName, POST_LIST_QUERY, safeBufferErrorDiagnostic } from '../src/buffer.ts';
+import { BufferAuthorizationError, bufferAuthorizationFailureEvidence, saveAuthorizedBufferConnection } from '../src/buffer-authorization.ts';
+import { BufferClient, BufferError, graphqlOperationName, POST_LIST_QUERY, safeBufferErrorDiagnostic, tokenRequest } from '../src/buffer.ts';
 import { assertPostEditable, buildCompleteAssetList, classifyMutationException, comparePost, EditService, fingerprintPost } from '../src/edit.ts';
 import { decrypt, encrypt, pkceChallenge, sanitize, sha256 } from '../src/security.ts';
 import { SESSION_COOKIE_MAX_AGE_SECONDS, serializeCookie } from '../src/cookies.ts';
@@ -22,6 +23,15 @@ const config = (): Config => ({
   bufferRedirectUri: 'https://localhost:3443/auth/buffer/callback', encryptionKey: randomBytes(32), cookieSecret: randomBytes(32),
   databasePath: ':memory:', requestTimeoutMs: 1000,
   operatorName: 'Example Operator', supportEmail: 'support@example.test', privacyEmail: 'privacy@example.test',
+});
+
+const productionEnvironment = (): NodeJS.ProcessEnv => ({
+  NODE_ENV: 'production', APP_ORIGIN: 'https://gabel.example.org', PORT: '3443',
+  BUFFER_CLIENT_ID: 'buffer-client', BUFFER_REDIRECT_URI: 'https://gabel.example.org/auth/buffer/callback',
+  APP_ENCRYPTION_KEY: randomBytes(32).toString('base64url'), APP_COOKIE_SECRET: randomBytes(32).toString('base64url'),
+  DATABASE_PATH: './data/production-test.db', TLS_KEY_PATH: './private/key.pem', TLS_CERT_PATH: './private/cert.pem',
+  BUFFER_REQUEST_TIMEOUT_MS: '15000', OPERATOR_NAME: 'Verified Operator',
+  SUPPORT_EMAIL: 'support@gabel.example.org', PRIVACY_EMAIL: 'privacy@gabel.example.org',
 });
 
 function setup() {
@@ -51,12 +61,35 @@ test('PKCE uses a URL-safe SHA-256 challenge', () => {
   assert.equal(pkceChallenge('dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk'), 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM');
 });
 
+test('production configuration fails closed on malformed origins, callback drift, placeholders, and unsafe secrets', () => {
+  const valid = productionEnvironment();
+  const parsed = loadConfig(valid);
+  assert.equal(parsed.appOrigin, 'https://gabel.example.org');
+  assert.equal(parsed.bufferRedirectUri, 'https://gabel.example.org/auth/buffer/callback');
+  assert.equal(parsed.port, 3443);
+
+  for (const override of [
+    { APP_ORIGIN: 'http://gabel.example.org' },
+    { APP_ORIGIN: 'https://gabel.example.org/path' },
+    { APP_ORIGIN: 'https://localhost:3443', BUFFER_REDIRECT_URI: 'https://localhost:3443/auth/buffer/callback' },
+    { BUFFER_REDIRECT_URI: 'https://other.example.org/auth/buffer/callback' },
+    { BUFFER_REDIRECT_URI: 'https://gabel.example.org/callback' },
+    { PORT: '0' }, { PORT: 'not-a-port' }, { BUFFER_REQUEST_TIMEOUT_MS: '999' },
+    { NODE_ENV: 'prodution' }, { BUFFER_CLIENT_ID: 'change-me' },
+    { OPERATOR_NAME: 'TODO' }, { SUPPORT_EMAIL: 'support@example.invalid' },
+  ]) assert.throws(() => loadConfig({ ...valid, ...override }));
+
+  assert.throws(() => loadConfig({ ...valid, APP_COOKIE_SECRET: valid.APP_ENCRYPTION_KEY }), /must be different/);
+  assert.throws(() => loadConfig({ ...valid, APP_ENCRYPTION_KEY: 'not+base64/value' }), /base64url/);
+  assert.throws(() => loadConfig({ ...valid, DATABASE_PATH: ':memory:' }), /persistent/);
+});
+
 test('OAuth state is one-time and rejects mismatches', () => {
   const { store, session } = setup();
   const cfg = config();
   const flow = beginOAuth(store, cfg, session);
   assert.equal(consumeOAuth(store, cfg, session, 'wrong'), undefined);
-  assert.equal(consumeOAuth(store, cfg, session, flow.state), flow.verifier);
+  assert.equal(consumeOAuth(store, cfg, session, flow.state)?.verifier, flow.verifier);
   assert.equal(consumeOAuth(store, cfg, session, flow.state), undefined);
   store.close();
 });
@@ -76,13 +109,23 @@ test('OAuth session cookies survive the cross-site top-level callback securely',
   assert.doesNotMatch(csrfCookie, /; HttpOnly/);
 });
 
+test('active sessions use sliding inactivity expiry', () => {
+  const { store, session } = setup();
+  const before = String((store.getSession(session) as Record<string, unknown>).expires_at);
+  const extended = new Date(Date.now() + SESSION_COOKIE_MAX_AGE_SECONDS * 1000).toISOString();
+  assert.equal(store.touchSession(session, extended), true);
+  assert.ok(String((store.getSession(session) as Record<string, unknown>).expires_at) > before);
+  assert.equal(store.touchSession('missing-session', extended), false);
+  store.close();
+});
+
 test('OAuth state expires and concurrent starts retain only the latest attempt', () => {
   const { store, session } = setup();
   const cfg = config();
   const first = beginOAuth(store, cfg, session);
   const second = beginOAuth(store, cfg, session);
   assert.equal(consumeOAuth(store, cfg, session, first.state), undefined);
-  assert.equal(consumeOAuth(store, cfg, session, second.state), second.verifier);
+  assert.equal(consumeOAuth(store, cfg, session, second.state)?.verifier, second.verifier);
   assert.equal(consumeOAuth(store, cfg, session, second.state), undefined);
 
   const expired = beginOAuth(store, cfg, session);
@@ -106,11 +149,124 @@ test('OAuth state and encrypted PKCE verifier survive a server-store restart', (
     const flow = beginOAuth(store, cfg, session);
     store.close();
     store = new Store(databasePath);
-    assert.equal(consumeOAuth(store, cfg, session, flow.state), flow.verifier);
+    assert.equal(consumeOAuth(store, cfg, session, flow.state)?.verifier, flow.verifier);
   } finally {
     store?.close();
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+const authorizedTokens = (overrides: Partial<{ access_token: string; refresh_token: string; token_type: 'Bearer'; expires_in: number; scope: string }> = {}) => ({
+  access_token: 'new-access', refresh_token: 'new-refresh', token_type: 'Bearer' as const, expires_in: 3600,
+  scope: 'account:read posts:read posts:write offline_access', ...overrides,
+});
+
+function setupReauthorization() {
+  const context = setup();
+  const cfg = config();
+  context.store.upsertConnection({ id: 'connection', tenant_id: context.tenant, buffer_account_id: 'expected-account',
+    access_token_ciphertext: encrypt('preserved-access', cfg.encryptionKey), refresh_token_ciphertext: encrypt('preserved-refresh', cfg.encryptionKey),
+    access_expires_at: new Date(0).toISOString(), scopes: 'account:read posts:read posts:write offline_access' });
+  context.store.requireReauth('connection');
+  return { ...context, cfg };
+}
+
+test('reauthorization preserves tenant evidence and replaces credentials only after matching identity', () => {
+  const { store, tenant, session, cfg } = setupReauthorization();
+  store.addEvidence({ id: 'evidence-before', tenantId: tenant, operation: 'fixture', outcome: 'not_tested', sanitized: { preserved: true } });
+  const flow = beginOAuth(store, cfg, session, { connectionId: 'connection', expectedTokenVersion: 1 });
+  const oauth = consumeOAuth(store, cfg, session, flow.state)!;
+  assert.deepEqual(oauth.reconnect, { connectionId: 'connection', expectedTokenVersion: 1 });
+  const saved = saveAuthorizedBufferConnection({ store, config: cfg, tenantId: tenant, oauth, tokens: authorizedTokens(), accountId: 'expected-account' });
+  assert.deepEqual(saved, { connectionId: 'connection', reauthorized: true });
+  const connection = store.getConnection(tenant, 'connection')!;
+  assert.equal(connection.status, 'active');
+  assert.equal(connection.token_version, 2);
+  assert.equal(decrypt(connection.access_token_ciphertext, cfg.encryptionKey), 'new-access');
+  assert.equal(decrypt(connection.refresh_token_ciphertext!, cfg.encryptionKey), 'new-refresh');
+  assert.equal((store.db.prepare('SELECT COUNT(*) count FROM evidence_events WHERE tenant_id=?').get(tenant) as { count: number }).count, 1);
+  store.close();
+});
+
+test('denied or interrupted reauthorization consumes state but preserves existing credentials', () => {
+  const { store, tenant, session, cfg } = setupReauthorization();
+  const before = store.getConnection(tenant, 'connection')!;
+  const denied = beginOAuth(store, cfg, session, { connectionId: 'connection', expectedTokenVersion: before.token_version });
+  assert.ok(consumeOAuth(store, cfg, session, denied.state));
+  assert.equal(consumeOAuth(store, cfg, session, denied.state), undefined);
+  assert.deepEqual(store.getConnection(tenant, 'connection'), before);
+
+  const interrupted = beginOAuth(store, cfg, session, { connectionId: 'connection', expectedTokenVersion: before.token_version });
+  assert.ok(consumeOAuth(store, cfg, session, interrupted.state));
+  assert.deepEqual(store.getConnection(tenant, 'connection'), before);
+  store.close();
+});
+
+test('reauthorization rejects insufficient grants and a mismatched Buffer account without changing credentials', () => {
+  for (const scenario of ['grant', 'identity'] as const) {
+    const { store, tenant, session, cfg } = setupReauthorization();
+    const before = store.getConnection(tenant, 'connection')!;
+    const flow = beginOAuth(store, cfg, session, { connectionId: 'connection', expectedTokenVersion: 1 });
+    const oauth = consumeOAuth(store, cfg, session, flow.state)!;
+    assert.throws(() => saveAuthorizedBufferConnection({ store, config: cfg, tenantId: tenant, oauth,
+      tokens: scenario === 'grant' ? authorizedTokens({ scope: 'account:read posts:read', refresh_token: '' }) : authorizedTokens(),
+      accountId: scenario === 'identity' ? 'different-account' : 'expected-account' }),
+    (error: BufferAuthorizationError) => error.code === (scenario === 'grant' ? 'insufficient_permissions' : 'account_mismatch'));
+    assert.deepEqual(store.getConnection(tenant, 'connection'), before);
+    store.close();
+  }
+});
+
+test('concurrent reauthorization has one winner and fences a stale refresh credential write', () => {
+  const { store, tenant, session, cfg } = setupReauthorization();
+  const secondSession = sha256('second-reauthorization-session');
+  store.createSession({ idHash: secondSession, tenantId: tenant, csrfHash: sha256('second-csrf'), expiresAt: new Date(Date.now() + 60_000).toISOString() });
+  const old = new Date();
+  assert.equal(store.acquireTokenRefreshClaim('connection', 1, 'old-refresh-worker', old, new Date(old.getTime() + 60_000)), 'uncertain');
+  // Simulate a refresh request that began before Buffer marked the connection for reauthorization.
+  store.db.prepare("UPDATE buffer_connections SET status='active' WHERE id='connection'").run();
+  assert.equal(store.acquireTokenRefreshClaim('connection', 1, 'old-refresh-worker', old, new Date(old.getTime() + 60_000)), 'acquired');
+  assert.equal(store.startTokenRefresh('connection', 1, 'old-refresh-worker', old, new Date(old.getTime() + 60_000)), true);
+  store.requireReauth('connection');
+
+  const firstFlow = beginOAuth(store, cfg, session, { connectionId: 'connection', expectedTokenVersion: 1 });
+  const secondFlow = beginOAuth(store, cfg, secondSession, { connectionId: 'connection', expectedTokenVersion: 1 });
+  const first = consumeOAuth(store, cfg, session, firstFlow.state)!;
+  const second = consumeOAuth(store, cfg, secondSession, secondFlow.state)!;
+  saveAuthorizedBufferConnection({ store, config: cfg, tenantId: tenant, oauth: first, tokens: authorizedTokens({ access_token: 'winner-access' }), accountId: 'expected-account' });
+  assert.throws(() => saveAuthorizedBufferConnection({ store, config: cfg, tenantId: tenant, oauth: second,
+    tokens: authorizedTokens({ access_token: 'loser-access' }), accountId: 'expected-account' }),
+  (error: BufferAuthorizationError) => error.code === 'stale_reauthorization');
+  assert.equal(store.commitTokenRefresh({ connectionId: 'connection', expectedVersion: 1, ownerId: 'old-refresh-worker',
+    access: encrypt('stale-access', cfg.encryptionKey), refresh: encrypt('stale-refresh', cfg.encryptionKey),
+    expiresAt: new Date(Date.now() + 3600_000).toISOString(), scopes: 'offline_access' }), false);
+  const current = store.getConnection(tenant, 'connection')!;
+  assert.equal(current.token_version, 2);
+  assert.equal(decrypt(current.access_token_ciphertext, cfg.encryptionKey), 'winner-access');
+  store.close();
+});
+
+test('reauthorization OAuth context is tenant-bound and rejects a cross-tenant connection', () => {
+  const { store, session, cfg } = setupReauthorization();
+  const otherTenant = randomUUID();
+  store.createTenant(otherTenant);
+  store.upsertConnection({ id: 'other-connection', tenant_id: otherTenant, buffer_account_id: 'other-account',
+    access_token_ciphertext: 'cipher', refresh_token_ciphertext: 'refresh', access_expires_at: new Date(0).toISOString(), scopes: 'offline_access' });
+  store.requireReauth('other-connection');
+  assert.throws(() => beginOAuth(store, cfg, session, { connectionId: 'other-connection', expectedTokenVersion: 1 }), /no longer eligible/);
+  store.close();
+});
+
+test('reauthorization evidence retains sanitized transport classification without credentials', () => {
+  const error = new BufferError('Buffer API request failed before a response was received', 'network',
+    { category: 'permission', errorName: 'Error', code: 'EACCES' }, undefined, undefined, undefined, 'GabelAccountIdentity');
+  const evidence = bufferAuthorizationFailureEvidence(error);
+  assert.deepEqual(evidence, { reason: 'network', diagnostic: {
+    kind: 'network', message: 'Buffer API request failed before a response was received', operationName: 'GabelAccountIdentity',
+    httpStatus: undefined, requestId: undefined, retryAfter: undefined,
+    details: { category: 'permission', errorName: 'Error', code: 'EACCES' },
+  } });
+  assert.doesNotMatch(JSON.stringify(evidence), /access_token|refresh_token|authorization/i);
 });
 
 test('credentials are encrypted in storage and sanitization redacts secrets', () => {
@@ -147,6 +303,96 @@ test('single-use refresh rotation is serialized for simultaneous callers', async
   assert.equal(calls, 1);
   assert.equal(decrypt(store.getConnection(tenant)!.refresh_token_ciphertext!, cfg.encryptionKey), 'refresh-2');
   store.close();
+});
+
+test('SQLite refresh claims coordinate independent stores and fence stale credential writes', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'gabel-refresh-claim-'));
+  const databasePath = join(directory, 'gabel.db');
+  const cfg = config();
+  let first: Store | undefined;
+  let second: Store | undefined;
+  try {
+    first = new Store(databasePath);
+    const tenant = randomUUID();
+    first.createTenant(tenant);
+    first.createSession({ idHash: sha256('refresh-session'), tenantId: tenant, csrfHash: sha256('refresh-csrf'),
+      expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    first.upsertConnection({ id: 'connection', tenant_id: tenant, buffer_account_id: 'account',
+      access_token_ciphertext: encrypt('old-access', cfg.encryptionKey), refresh_token_ciphertext: encrypt('old-refresh', cfg.encryptionKey),
+      access_expires_at: new Date(0).toISOString(), scopes: 'offline_access' });
+    second = new Store(databasePath);
+    const now = new Date();
+    assert.equal(first.acquireTokenRefreshClaim('connection', 1, 'worker-one', now, new Date(now.getTime() + 10_000)), 'acquired');
+    assert.equal(second.acquireTokenRefreshClaim('connection', 1, 'worker-two', now, new Date(now.getTime() + 10_000)), 'in_progress');
+    assert.equal(first.startTokenRefresh('connection', 1, 'worker-one', now, new Date(now.getTime() + 10_000)), true);
+    assert.equal(second.acquireTokenRefreshClaim('connection', 1, 'worker-two', now, new Date(now.getTime() + 10_000)), 'uncertain');
+
+    first.upsertConnection({ id: 'replacement-id', tenant_id: tenant, buffer_account_id: 'account',
+      access_token_ciphertext: encrypt('newer-access', cfg.encryptionKey), refresh_token_ciphertext: encrypt('newer-refresh', cfg.encryptionKey),
+      access_expires_at: new Date(Date.now() + 3_600_000).toISOString(), scopes: 'offline_access' });
+    assert.equal(second.commitTokenRefresh({ connectionId: 'connection', expectedVersion: 1, ownerId: 'worker-one',
+      access: encrypt('stale-access', cfg.encryptionKey), refresh: encrypt('stale-refresh', cfg.encryptionKey),
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(), scopes: 'offline_access' }), false);
+    const connection = first.getConnection(tenant, 'connection')!;
+    assert.equal(connection.token_version, 2);
+    assert.equal(decrypt(connection.access_token_ciphertext, cfg.encryptionKey), 'newer-access');
+    assert.equal(first.requireReauthIfVersion('connection', 1), false);
+    assert.equal(first.getConnection(tenant, 'connection')!.status, 'active');
+  } finally {
+    second?.close();
+    first?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('an expired refresh request claim fails closed without replaying a possibly consumed token', async () => {
+  const { store, tenant } = setup();
+  const cfg = config();
+  store.upsertConnection({ id: 'connection', tenant_id: tenant, buffer_account_id: 'account',
+    access_token_ciphertext: encrypt('expired', cfg.encryptionKey), refresh_token_ciphertext: encrypt('single-use-refresh', cfg.encryptionKey),
+    access_expires_at: new Date(0).toISOString(), scopes: 'offline_access' });
+  const old = new Date(Date.now() - 60_000);
+  assert.equal(store.acquireTokenRefreshClaim('connection', 1, 'crashed-worker', old, new Date(old.getTime() + 1_000)), 'acquired');
+  assert.equal(store.startTokenRefresh('connection', 1, 'crashed-worker', old, new Date(old.getTime() + 2_000)), true);
+  let requests = 0;
+  const client = new BufferClient(cfg, store, async () => { requests++; throw new Error('must not send'); });
+  await assert.rejects(client.accessToken(store.getConnection(tenant, 'connection')!), /automatic replay is disabled/);
+  assert.equal(requests, 0);
+  assert.equal(store.getConnection(tenant, 'connection')!.status, 'reauthorization_required');
+  store.close();
+});
+
+test('deterministic Buffer transport fixtures distinguish restrictions, DNS, and timeout without leaking details', async () => {
+  const cases = [
+    { error: Object.assign(new Error('private permission detail'), { cause: { code: 'EACCES' } }), kind: 'network', category: 'permission', code: 'EACCES' },
+    { error: Object.assign(new Error('private DNS detail'), { code: 'ENOTFOUND' }), kind: 'network', category: 'dns', code: 'ENOTFOUND' },
+    { error: Object.assign(new Error('private timeout detail'), { name: 'TimeoutError', code: 'ETIMEDOUT' }), kind: 'timeout', category: 'timeout', code: 'ETIMEDOUT' },
+  ] as const;
+  for (const fixture of cases) {
+    const store = new Store(':memory:');
+    const client = new BufferClient(config(), store, async () => { throw fixture.error; });
+    await assert.rejects(client.rawGraphql('token', 'query GabelTransportFixture { account { id } }'), (error: BufferError) => {
+      const diagnostic = safeBufferErrorDiagnostic(error);
+      assert.equal(diagnostic.kind, fixture.kind);
+      assert.equal(diagnostic.operationName, 'GabelTransportFixture');
+      assert.deepEqual(diagnostic.details, { category: fixture.category, errorName: fixture.error.name, code: fixture.code });
+      assert.equal(JSON.stringify(diagnostic).includes('private'), false);
+      return true;
+    });
+    store.close();
+  }
+
+  await assert.rejects(tokenRequest(config(), new URLSearchParams({ grant_type: 'refresh_token', refresh_token: 'must-not-leak' }),
+    async () => { throw Object.assign(new Error('private permission detail'), { cause: { code: 'EACCES' } }); }, 'BufferTokenRefresh'),
+  (error: BufferError) => {
+    const diagnostic = safeBufferErrorDiagnostic(error);
+    assert.equal(diagnostic.kind, 'network');
+    assert.equal(diagnostic.operationName, 'BufferTokenRefresh');
+    assert.deepEqual(diagnostic.details, { category: 'permission', errorName: 'Error', code: 'EACCES' });
+    assert.equal(JSON.stringify(diagnostic).includes('must-not-leak'), false);
+    assert.equal(JSON.stringify(diagnostic).includes('private'), false);
+    return true;
+  });
 });
 
 test('GraphQL parser accepts data and retains request identifiers', async () => {
@@ -263,6 +509,43 @@ test('verification catches scheduling and unrelated metadata changes', () => {
   assert.ok(result.discrepancies.includes('post text changed'));
 });
 
+test('verification accepts an unchanged scheduled status and exact post identity', () => {
+  const before = post();
+  const intended = buildCompleteAssetList(before, new Map([[0, 'https://new.example/a.jpg']]));
+  const after = post({ assets: [{ ...before.assets[0], source: 'https://new.example/a.jpg' }, before.assets[1]] });
+  assert.deepEqual(comparePost(before, after, intended), { matches: true, discrepancies: [] });
+});
+
+test('verification rejects an unexpected post-status change', () => {
+  const before = post();
+  const intended = buildCompleteAssetList(before, new Map());
+  const result = comparePost(before, post({ status: 'sending' }), intended);
+  assert.equal(result.matches, false);
+  assert.ok(result.discrepancies.includes('post status changed'));
+});
+
+test('verification rejects a partial fresh post response with missing status', () => {
+  const before = post();
+  const after = { ...post(), status: undefined } as unknown as BufferPost;
+  const result = comparePost(before, after, buildCompleteAssetList(before, new Map()));
+  assert.equal(result.matches, false);
+  assert.ok(result.discrepancies.includes('fresh post status is missing'));
+});
+
+test('verification rejects a fresh post response with an unknown status', () => {
+  const before = post();
+  const result = comparePost(before, post({ status: 'mystery-status' }), buildCompleteAssetList(before, new Map()));
+  assert.equal(result.matches, false);
+  assert.ok(result.discrepancies.includes('fresh post status is unknown'));
+});
+
+test('verification rejects a changed post identity', () => {
+  const before = post();
+  const result = comparePost(before, post({ id: 'different-post' }), buildCompleteAssetList(before, new Map()));
+  assert.equal(result.matches, false);
+  assert.ok(result.discrepancies.includes('post identity changed'));
+});
+
 test('post fingerprint detects changes between preparation and confirmation', () => {
   assert.notEqual(fingerprintPost(post()), fingerprintPost(post({ updatedAt: 'later' })));
 });
@@ -314,11 +597,18 @@ test('edit preparation requires a fresh reachable, supported, size-safe, dimensi
   }
   assert.equal((harness.store.db.prepare('SELECT COUNT(*) count FROM edit_intents').get() as { count: number }).count, 0);
 
+  const checkedAt = new Date().toISOString();
+  harness.store.saveMediaCheck({ tenantId: harness.tenant, connectionId: 'connection', postId: harness.before.id,
+    status: 'confirmed_problem', checkedCount: 1, checkedAt,
+    summary: [{ position: 0, type: 'image', label: 'CONFIRMED PROBLEM', detail: 'The server returned an unsuccessful response.', httpStatus: 410 }] });
   const edits = new EditService(harness.store, harness.fake, { probe: async () => successfulImageProbe() });
   const intentId = await edits.prepare(harness.tenant, 'connection', harness.before.id, replacements);
   const row = harness.store.db.prepare('SELECT intended_assets_json,outcome_json FROM edit_intents WHERE id=?').get(intentId) as Record<string, string>;
   assert.equal((JSON.parse(row.intended_assets_json)[0] as { image: { thumbnailUrl?: string } }).image.thumbnailUrl, undefined);
-  assert.equal((JSON.parse(row.outcome_json) as { replacementValidations: unknown[] }).replacementValidations.length, 1);
+  const outcome = JSON.parse(row.outcome_json) as { replacementValidations: unknown[]; problemEvidence: { checkedAt: string; summary: Array<{ httpStatus: number }> } };
+  assert.equal(outcome.replacementValidations.length, 1);
+  assert.equal(outcome.problemEvidence.checkedAt, checkedAt);
+  assert.equal(outcome.problemEvidence.summary[0].httpStatus, 410);
   assert.equal(harness.mutationSent(), false);
   harness.store.close();
 });
@@ -345,8 +635,135 @@ test('fresh post changes abort a prepared edit before revalidation or mutation',
   harness.store.close();
 });
 
+test('successful edit response with failed fresh post verification remains ambiguous', async () => {
+  const harness = replacementValidationHarness();
+  let reads = 0;
+  const fake = { ...harness.fake,
+    getPost: async () => {
+      reads++;
+      if (reads <= 2) return { post: harness.before };
+      throw new BufferError('fresh verification unavailable', 'network');
+    },
+  } as unknown as BufferClient;
+  const edits = new EditService(harness.store, fake, { probe: async () => successfulImageProbe() });
+  const intentId = await edits.prepare(harness.tenant, 'connection', harness.before.id,
+    new Map([[0, 'https://public.example/replacement.jpg']]));
+  await assert.rejects(edits.confirm(harness.tenant, intentId, `EDIT POST ${harness.before.id}`),
+    /verification retrieval failed/);
+  const row = harness.store.db.prepare('SELECT status FROM edit_intents WHERE id=?').get(intentId) as { status: string };
+  assert.equal(row.status, 'ambiguous');
+  assert.equal(harness.mutationSent(), true);
+  harness.store.close();
+});
+
+test('successful edit response with changed fresh post status remains ambiguous', async () => {
+  const harness = replacementValidationHarness();
+  const replacementUrl = 'https://public.example/replacement.jpg';
+  const after = { ...harness.before, status: 'sending',
+    assets: [{ ...harness.before.assets[0], source: replacementUrl }] };
+  let reads = 0;
+  const baseGraphql = harness.fake.graphql.bind(harness.fake);
+  const fake = { ...harness.fake,
+    getPost: async () => ({ post: ++reads <= 2 ? harness.before : after }),
+    graphql: async (...args: Parameters<BufferClient['graphql']>) => {
+      const result = await baseGraphql(...args);
+      return args[2].includes('GabelEditPost') ? { ...result, data: { editPost: { post: after } } } : result;
+    },
+  } as unknown as BufferClient;
+  const edits = new EditService(harness.store, fake, { probe: async () => successfulImageProbe() });
+  const intentId = await edits.prepare(harness.tenant, 'connection', harness.before.id, new Map([[0, replacementUrl]]));
+  const comparison = await edits.confirm(harness.tenant, intentId, `EDIT POST ${harness.before.id}`);
+  assert.equal(comparison.matches, false);
+  assert.ok(comparison.discrepancies.includes('post status changed'));
+  const row = harness.store.db.prepare('SELECT status FROM edit_intents WHERE id=?').get(intentId) as { status: string };
+  assert.equal(row.status, 'ambiguous');
+  assert.equal(harness.mutationSent(), true);
+  harness.store.close();
+});
+
+test('two simultaneous approvals atomically claim one intent and send one edit mutation', async () => {
+  const harness = replacementValidationHarness();
+  let mutationCalls = 0;
+  const baseGraphql = harness.fake.graphql.bind(harness.fake);
+  const fake = { ...harness.fake, graphql: async (...args: Parameters<BufferClient['graphql']>) => {
+    if (args[2].includes('GabelEditPost')) mutationCalls++;
+    return baseGraphql(...args);
+  }} as unknown as BufferClient;
+  const edits = new EditService(harness.store, fake, { probe: async () => successfulImageProbe() });
+  const intentId = await edits.prepare(harness.tenant, 'connection', harness.before.id,
+    new Map([[0, 'https://public.example/replacement.jpg']]));
+  const results = await Promise.allSettled([
+    edits.confirm(harness.tenant, intentId, `EDIT POST ${harness.before.id}`),
+    edits.confirm(harness.tenant, intentId, `EDIT POST ${harness.before.id}`),
+  ]);
+  assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+  assert.equal(results.filter((result) => result.status === 'rejected').length, 1);
+  assert.equal(mutationCalls, 1);
+  const claim = harness.store.db.prepare('SELECT state,COUNT(*) count FROM edit_intent_claims WHERE intent_id=?')
+    .get(intentId) as { state: string; count: number };
+  assert.equal(claim.count, 1);
+  assert.equal(claim.state, 'ambiguous');
+  harness.store.close();
+});
+
+test('claimed, expired, and ambiguous edit intents never replay a possible mutation', async () => {
+  const harness = replacementValidationHarness();
+  const edits = new EditService(harness.store, harness.fake, { probe: async () => successfulImageProbe() });
+  const intentId = await edits.prepare(harness.tenant, 'connection', harness.before.id,
+    new Map([[0, 'https://public.example/replacement.jpg']]));
+  assert.ok(harness.store.claimEditIntent(harness.tenant, intentId, harness.before.id, 'crashed-worker'));
+  harness.store.db.prepare('UPDATE edit_intent_claims SET expires_at=? WHERE intent_id=?').run(new Date(0).toISOString(), intentId);
+  await assert.rejects(edits.confirm(harness.tenant, intentId, `EDIT POST ${harness.before.id}`), /already claimed/);
+  assert.equal(harness.mutationSent(), false);
+
+  const second = await edits.prepare(harness.tenant, 'connection', harness.before.id,
+    new Map([[0, 'https://public.example/replacement.jpg']]));
+  let mutationCalls = 0;
+  const ambiguousBuffer = { ...harness.fake,
+    graphql: async (...args: Parameters<BufferClient['graphql']>) => {
+      if (args[2].includes('GabelEditPost')) {
+        mutationCalls++;
+        throw new BufferError('response lost', 'network');
+      }
+      return harness.fake.graphql(...args);
+    },
+  } as unknown as BufferClient;
+  const ambiguousEdits = new EditService(harness.store, ambiguousBuffer, { probe: async () => successfulImageProbe() });
+  await assert.rejects(ambiguousEdits.confirm(harness.tenant, second, `EDIT POST ${harness.before.id}`), /response lost/);
+  await assert.rejects(ambiguousEdits.confirm(harness.tenant, second, `EDIT POST ${harness.before.id}`), /already used/);
+  assert.equal(mutationCalls, 1);
+  assert.equal((harness.store.db.prepare('SELECT state FROM edit_intent_claims WHERE intent_id=?').get(second) as { state: string }).state, 'ambiguous');
+
+  const interrupted = await edits.prepare(harness.tenant, 'connection', harness.before.id,
+    new Map([[0, 'https://public.example/replacement.jpg']]));
+  assert.ok(harness.store.claimEditIntent(harness.tenant, interrupted, harness.before.id, 'interrupted-worker'));
+  assert.equal(harness.store.startEditMutation(interrupted, 'interrupted-worker'), true);
+  harness.store.db.prepare('UPDATE edit_intent_claims SET expires_at=? WHERE intent_id=?').run(new Date(0).toISOString(), interrupted);
+  await assert.rejects(edits.confirm(harness.tenant, interrupted, `EDIT POST ${harness.before.id}`), /already claimed/);
+  assert.equal((harness.store.db.prepare('SELECT status FROM edit_intents WHERE id=?').get(interrupted) as { status: string }).status, 'ambiguous');
+  assert.equal((harness.store.db.prepare('SELECT state FROM edit_intent_claims WHERE intent_id=?').get(interrupted) as { state: string }).state, 'ambiguous');
+  assert.equal(mutationCalls, 1);
+  harness.store.close();
+});
+
+test('edit intent claims reject expired and cross-tenant approvals before Buffer work', async () => {
+  const harness = replacementValidationHarness();
+  const other = randomUUID();
+  harness.store.createTenant(other);
+  const edits = new EditService(harness.store, harness.fake, { probe: async () => successfulImageProbe() });
+  const intentId = await edits.prepare(harness.tenant, 'connection', harness.before.id,
+    new Map([[0, 'https://public.example/replacement.jpg']]));
+  await assert.rejects(edits.confirm(other, intentId, `EDIT POST ${harness.before.id}`), /belongs to another tenant/);
+  harness.store.db.prepare('UPDATE edit_intents SET expires_at=? WHERE id=?').run(new Date(0).toISOString(), intentId);
+  await assert.rejects(edits.confirm(harness.tenant, intentId, `EDIT POST ${harness.before.id}`), /expired/);
+  assert.equal(harness.mutationSent(), false);
+  assert.equal((harness.store.db.prepare('SELECT COUNT(*) count FROM edit_intent_claims').get() as { count: number }).count, 0);
+  harness.store.close();
+});
+
 test('a network exception during mutation is classified as ambiguous', () => {
   assert.equal(classifyMutationException(new BufferError('lost response', 'network')), 'ambiguous');
+  assert.equal(classifyMutationException(new BufferError('timed out', 'timeout')), 'ambiguous');
   assert.equal(classifyMutationException(new BufferError('partial GraphQL result', 'graphql')), 'ambiguous');
   assert.equal(classifyMutationException(new BufferError('not authorized', 'auth')), 'failure');
 });
@@ -363,6 +780,59 @@ test('tenant isolation applies to connection lookup and edit intents', () => {
   store.replacePosts(tenant, 'private', 'org', [post()]);
   assert.equal(store.hasCachedPost(tenant, 'private', post().id), true);
   assert.equal(store.hasCachedPost(other, 'private', post().id), false);
+  store.close();
+});
+
+test('media check summaries are tenant-scoped, time-bounded, and drive the dashboard state', () => {
+  const { store, tenant } = setup();
+  const other = randomUUID();
+  store.createTenant(other);
+  store.upsertConnection({ id: 'connection', tenant_id: tenant, buffer_account_id: 'account', access_token_ciphertext: 'cipher',
+    refresh_token_ciphertext: null, access_expires_at: new Date(Date.now() + 60_000).toISOString(), scopes: 'posts:read' });
+  store.replacePosts(tenant, 'connection', 'org', [post()]);
+  const now = new Date('2026-11-06T12:00:00.000Z');
+  store.saveMediaCheck({ tenantId: tenant, connectionId: 'connection', postId: post().id, status: 'confirmed_problem',
+    checkedCount: 1, checkedAt: now.toISOString(), summary: [{ position: 0, label: 'CONFIRMED PROBLEM', httpStatus: 410 }] });
+  assert.deepEqual(store.getFreshConfirmedProblemPositions(tenant, 'connection', post().id, now), [0]);
+  assert.equal(store.hasFreshConfirmedProblem(tenant, 'connection', post().id, new Date(now.getTime() + 9 * 60_000)), true);
+  assert.equal(store.hasFreshConfirmedProblem(tenant, 'connection', post().id, new Date(now.getTime() + 11 * 60_000)), false);
+  assert.equal(store.hasFreshConfirmedProblem(other, 'connection', post().id, now), false);
+  const dashboardPost = store.listDashboard(tenant).posts[0] as Record<string, unknown>;
+  assert.equal(dashboardPost.media_status, 'confirmed_problem');
+  assert.equal(dashboardPost.checked_count, 1);
+  store.saveMediaCheck({ tenantId: tenant, connectionId: 'connection', postId: post().id, status: 'could_not_verify',
+    checkedCount: 1, checkedAt: new Date(now.getTime() + 1_000).toISOString(), summary: [] });
+  assert.equal(store.hasFreshConfirmedProblem(tenant, 'connection', post().id, new Date(now.getTime() + 2_000)), false);
+  store.close();
+});
+
+test('read-only verification selects only the explicit authenticated tenant connection', () => {
+  const store = new Store(':memory:');
+  const firstTenant = randomUUID();
+  const secondTenant = randomUUID();
+  for (const [tenant, suffix] of [[firstTenant, 'first'], [secondTenant, 'second']] as const) {
+    store.createTenant(tenant);
+    store.createSession({ idHash: sha256(`session-${suffix}`), tenantId: tenant, csrfHash: sha256(`csrf-${suffix}`),
+      expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    store.upsertConnection({ id: `connection-${suffix}`, tenant_id: tenant, buffer_account_id: `account-${suffix}`,
+      access_token_ciphertext: `cipher-${suffix}`, refresh_token_ciphertext: `refresh-${suffix}`,
+      access_expires_at: new Date(Date.now() + 60_000).toISOString(), scopes: 'account:read posts:read' });
+  }
+  assert.equal(store.requireAuthenticatedTenantConnection(secondTenant).id, 'connection-second');
+  store.close();
+});
+
+test('read-only verification fails closed without a current authenticated tenant context', () => {
+  const store = new Store(':memory:');
+  const tenant = randomUUID();
+  store.createTenant(tenant);
+  store.createSession({ idHash: sha256('expired-session'), tenantId: tenant, csrfHash: sha256('expired-csrf'),
+    expiresAt: new Date(0).toISOString() });
+  store.upsertConnection({ id: 'connection', tenant_id: tenant, buffer_account_id: 'account',
+    access_token_ciphertext: 'cipher', refresh_token_ciphertext: 'refresh',
+    access_expires_at: new Date(Date.now() + 60_000).toISOString(), scopes: 'account:read posts:read' });
+  assert.throws(() => store.requireAuthenticatedTenantConnection(''), /explicit authenticated tenant/);
+  assert.throws(() => store.requireAuthenticatedTenantConnection(tenant), /no unexpired browser session/);
   store.close();
 });
 
@@ -394,7 +864,7 @@ test('account deletion cascades sessions, credentials, cached data, intents, and
     refresh_token_ciphertext: encrypt('refresh', cfg.encryptionKey), access_expires_at: new Date(Date.now() + 60_000).toISOString(), scopes: 'offline_access' });
   store.addEvidence({ id: 'event', tenantId: tenant, operation: 'test', outcome: 'success', sanitized: {} });
   assert.equal(store.deleteTenant(tenant), true);
-  for (const table of ['tenants', 'browser_sessions', 'buffer_connections', 'organizations', 'channels', 'posts', 'assets', 'edit_intents', 'evidence_events']) {
+  for (const table of ['tenants', 'browser_sessions', 'buffer_connections', 'organizations', 'channels', 'posts', 'post_media_checks', 'assets', 'edit_intents', 'evidence_events']) {
     const row = store.db.prepare(`SELECT COUNT(*) count FROM ${table}`).get() as { count: number };
     assert.equal(row.count, 0, `${table} should be empty`);
   }
@@ -502,6 +972,16 @@ test('media diagnostics distinguish DNS, timeout, TLS, and unsupported formats',
   assert.equal(classifyMediaContentType(undefined), 'unknown');
 });
 
+test('deterministic HTTP 410 media fixture is a confirmed problem', async () => {
+  const result = await probeMediaUrl('https://gone.example/original.png', {
+    resolver: async () => ['93.184.216.34'],
+    requester: async () => ({ status: 410, contentType: 'text/plain', bodyPrefix: Buffer.from('Gone') }),
+  });
+  assert.equal(result.outcome, 'unreachable');
+  assert.equal(result.httpStatus, 410);
+  assert.equal(publicMediaStatus(result).label, 'CONFIRMED PROBLEM');
+});
+
 test('public media results clearly distinguish confirmed, inconclusive, unsupported, and ready states', () => {
   assert.equal(publicMediaStatus(successfulImageProbe({ outcome: 'unreachable', httpStatus: 404 })).label, 'CONFIRMED PROBLEM');
   assert.equal(publicMediaStatus(successfulImageProbe({ outcome: 'error', errorCategory: 'dns', httpStatus: undefined })).label, 'COULD NOT VERIFY');
@@ -600,29 +1080,37 @@ test('page shell provides keyboard landmarks, focus visibility, contact, and AA 
   assert.match(html, /<html lang="en">/);
   assert.match(html, /href="#main">Skip to main content/);
   assert.match(html, /<nav aria-label="Primary">/);
-  assert.match(html, /<main id="main">/);
+  assert.match(html, /<main id="main" class="shell">/);
   assert.match(html, /:focus-visible/);
+  assert.match(html, /summary:focus-visible/);
+  assert.match(html, /@media\(forced-colors:active\)/);
+  assert.match(html, /outline:3px solid Highlight/);
+  assert.match(html, /summary\{display:inline-flex;align-items:center;min-height:2\.75rem/);
   assert.match(html, /support@example\.test/);
   assert.doesNotMatch(html, /tabindex="[1-9]/);
-  assert.ok(contrast('#17202a', '#ffffff') >= 4.5);
-  assert.ok(contrast('#45515d', '#ffffff') >= 4.5);
-  assert.ok(contrast('#ffffff', '#17202a') >= 4.5);
-  assert.ok(contrast('#0050a4', '#ffffff') >= 4.5);
-  assert.ok(contrast('#17202a', '#fff5d6') >= 4.5);
-  assert.ok(contrast('#17202a', '#ffe5e5') >= 4.5);
-  assert.ok(contrast('#17202a', '#e3f7e8') >= 4.5);
-  assert.ok(contrast('#005fcc', '#ffffff') >= 3);
+  assert.ok(contrast('#172019', '#fbfaf7') >= 4.5);
+  assert.ok(contrast('#5d685f', '#fbfaf7') >= 4.5);
+  assert.ok(contrast('#ffffff', '#172019') >= 4.5);
+  assert.ok(contrast('#1e5d86', '#fbfaf7') >= 4.5);
+  assert.ok(contrast('#8a5500', '#fff3d6') >= 4.5);
+  assert.ok(contrast('#a1322c', '#fbe9e6') >= 4.5);
+  assert.ok(contrast('#17643b', '#e7f3e9') >= 4.5);
+  assert.ok(contrast('#1c6aa0', '#fbfaf7') >= 3);
 });
 
 test('production forms expose labels and native keyboard controls without image-alt gaps', () => {
   const source = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
-  assert.match(source, /label for=\"replacements-\$\{index\}\"/);
+  assert.match(source, /label for=\"affected-position\"/);
+  assert.match(source, /label for=\"replacement-url\"/);
   assert.match(source, /label for=\"disconnect-confirmation\"/);
   assert.match(source, /label for=\"delete-confirmation\"/);
-  assert.match(source, /<label>Type <code>EDIT POST[\s\S]*?<input name=\"confirmation\"/);
+  assert.match(source, /label for=\"confirmation\"[\s\S]*?<input id=\"confirmation\" name=\"confirmation\"/);
   assert.doesNotMatch(source, /tabindex=\"[1-9]/);
   assert.doesNotMatch(source, /<div[^>]+onclick=/i);
   assert.doesNotMatch(source, /<img\b/i);
+  assert.match(source, /strict-transport-security/);
+  assert.match(source, /cross-origin-opener-policy/);
+  assert.match(source, /x-frame-options/);
 });
 
 test('legal drafts match implemented data practices and avoid paid or certification claims', () => {
@@ -631,6 +1119,7 @@ test('legal drafts match implemented data practices and avoid paid or certificat
   const terms = termsOfService(cfg);
   assert.match(privacy, /no analytics, advertising trackers, marketing email, payment processing/);
   assert.match(privacy, /two first-party, strictly necessary cookies/);
+  assert.match(privacy, /seven days without a valid browser session/);
   assert.match(terms, /no fee, subscription, refund/);
   assert.match(terms, /does not guarantee publication/);
   assert.doesNotMatch(`${privacy}${terms}`, /legally compliant|certified compliant/i);

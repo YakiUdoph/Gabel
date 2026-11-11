@@ -18,3 +18,10 @@ Test date: 2026-11-02; addendum reconciliation updated the evidence on the same 
 | Pointer/touch target sizing and mobile interaction | NOT TESTED manually | Requires browser/device interaction; source inspection alone is insufficient |
 
 Automated checks do not replace manual accessibility testing. No manual row above is marked PASS.
+
+## 2026-11-07 production-readiness addendum
+
+- **PASS — automated/local Chromium:** the bounded browser harness rendered the real server output for authentication/empty state, dashboard, post detail, approval, verified fixture, uncertain fixture, and failed fixture at 1440 by 900 and 500 by 844. It exercised expired session, stale evidence, invalid replacement URL, failed retrieval, and all five media states. Every simulated repair state remained visibly labeled as a local fixture.
+- **PASS — automated structure and styling:** labels, native controls, skip navigation, landmarks, visible focus, 44px primary controls, responsive rules, reduced motion, tested 4.5:1 text contrast, and a forced-colors rule for boundaries and focus were verified. A missing forced-colors treatment found in this pass was implemented.
+- **FIXED — automation reliability:** browser subprocesses now have a 20-second per-command timeout. The restricted GPU run timed out and was recorded as failed; the approved local headless-Chrome run passed.
+- **NOT TESTED manually:** keyboard-only traversal, screen-reader announcements, Windows forced-colors rendering, 200%/400% browser zoom, orientation, and touch-device use still require a human assistive-technology pass before submission. No WCAG conformance certification is claimed.
