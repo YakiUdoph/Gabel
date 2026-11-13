@@ -858,3 +858,20 @@ Created: 2026-11-02. This is the first task record found in the repository and d
 - [x] Through Gabel's normal-host bounded probe and exact-body reads, verify original/replacement/control as unredirected no-store HTTP 200 PNGs with exact reviewed sizes/hashes and 1672 × 941 dimensions.
 - [x] Obtain operator-provided independent-network visual confirmation that original, replacement, and control all render normally after restoration; label it visual evidence rather than exact HTTP/byte evidence.
 - [x] Send no Buffer mutation, additional Cloudflare deployment, commit, or push.
+
+## Premium UI refinement, controlled-cleanup repair, and release-readiness pass — 2026-11-13
+
+- [x] Re-read the repository governance, README/JUDGE guidance, compliance/current-phase evidence, and the supplied implementation brief before changes.
+- [x] Preserve the existing server-rendered TypeScript/SQLite architecture, locked DETECT → REPAIR → VERIFY workflow, status model, mutation approval, tenant boundaries, SSRF controls, and accessibility safeguards.
+- [x] Run the untouched baseline: typecheck PASS, unit/security tests PASS 79/79, and integration tests PASS 5/5.
+- [x] Refine the dashboard, scheduled-post cards, focused media result, repair panel, approval, and verification presentation with a more distinctive surface system, typography, hierarchy, responsive wrapping, restrained transitions, and reduced-motion support; add no dependency.
+- [x] Run and visually inspect the isolated local Chromium fixture flow at desktop and mobile sizes; preserve truthful LOCAL TEST FIXTURE disclosure and make no Buffer or Cloudflare request.
+- [x] Confirm the controlled cleanup defect still existed: the reusable delete path accepted only the signed original image even after a legitimate verified repair.
+- [x] Add a narrowly scoped cleanup path that accepts the signed original state or exactly one tenant/connection/post-bound, completed and confirmed Gabel repair whose intended single-image replacement and every protected field match the fresh post.
+- [x] Keep signed-receipt authentication, exact post/channel/time/text/mode/status checks, current `deletePost` capability, and exact deletion confirmation; reject unrelated identity, altered channel/time/text, unauthorized media, and missing confirmation.
+- [x] Add focused regression coverage for original-state cleanup, verified repaired-state cleanup, altered identity/channel/time/text/media rejection, and missing deletion authorization.
+- [x] Correct current README, judge, and compliance addendum claims to record the November 8 controlled live repair without presenting it as a public judge sandbox or production approval.
+- [x] Run final verification: typecheck PASS, unit/security tests PASS 80/80, integration tests PASS 5/5, and approved local Chromium browser regression PASS.
+- [ ] Complete manual keyboard-only, screen-reader, forced-colors, 200%/400% zoom, orientation, and touch review; automated/browser evidence is not an accessibility certification.
+- [ ] Provide approved production hostname/TLS/contact/infrastructure evidence, qualified legal review, and a public judge reproduction path before deployment or submission-readiness claims.
+- [x] Perform no live Buffer mutation, OAuth interaction, Cloudflare change, deployment, secret change, commit, push, or phase advancement. Production compliance remains **FAIL**.

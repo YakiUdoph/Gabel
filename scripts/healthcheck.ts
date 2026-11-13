@@ -6,7 +6,7 @@ const port = Number(process.env.PORT ?? 3443);
 await new Promise<void>((resolve, reject) => {
   const req = request({
     hostname: '127.0.0.1', port, path: '/health/ready', method: 'GET',
-    servername: origin.hostname, rejectUnauthorized: true, timeout: 5_000,
+    servername: process.env.TLS_ORIGIN_HOSTNAME || origin.hostname, rejectUnauthorized: true, timeout: 5_000,
   }, (response) => {
     response.resume();
     response.once('end', () => response.statusCode === 200 ? resolve() : reject(new Error(`Readiness returned ${response.statusCode}`)));

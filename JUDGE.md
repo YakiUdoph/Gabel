@@ -4,7 +4,7 @@
 
 Gabel finds an upcoming Buffer API post whose externally hosted image may no longer open. It can validate a replacement and, only after an exact human confirmation, change that image while checking that the post's copy, channel, schedule, and other assets remain intact.
 
-**Current decision: not judge-ready.** Gabel is not deployed, has no judge sandbox or demo credentials, and has not completed a live repair. The safest current evaluation is a local read-only media check against a Buffer account and scheduled post you control.
+**Current decision: not judge-ready.** Gabel is not deployed and has no judge sandbox or demo credentials. One controlled disposable-post repair was verified live on November 8, 2026, but that post was deleted during the authorized cleanup, so the safest current evaluation remains a local read-only media check against a Buffer account and scheduled post you control.
 
 ## 1. What Gabel solves
 
@@ -67,7 +67,7 @@ Do not send credentials, tokens, private post text, or signed media URLs to a ju
 
 ## 7. Short walkthrough
 
-The complete happy path below describes implemented behavior. Steps 1–4 have live read evidence; steps 5–8 have automated coverage but have not been completed as a live repair.
+The complete happy path below describes implemented behavior. All steps were completed once in a controlled live run on November 8, 2026, with separate mutation approvals, fresh verification, receipt-bound cleanup, and media-fixture restoration. There is no currently available hosted setup for a judge to repeat that run.
 
 1. Start the app with `npm.cmd start` and open the configured HTTPS origin.
 2. Select **Connect Buffer**, approve the requested access, then select **Refresh from Buffer**.
@@ -78,7 +78,7 @@ The complete happy path below describes implemented behavior. Steps 1–4 have l
 7. If and only if the exact change is authorized, type the displayed `EDIT POST <post-id>` phrase and submit once.
 8. Read the fresh comparison. A matching comparison should say **Edit verified**; a mismatch or uncertain mutation should not be presented as success.
 
-There is currently no authorized disposable setup for steps 5–8. The truthful next step is to establish the controlled test described in [docs/CONTROLLED-E2E-REPAIR-TEST-PLAN.md](docs/CONTROLLED-E2E-REPAIR-TEST-PLAN.md), then obtain each required authorization.
+There is currently no authorized disposable setup for steps 5–8. Repeating the controlled proof requires a new disposable post, bounded operator window, controlled media state, and each separate authorization in [docs/CONTROLLED-E2E-REPAIR-TEST-PLAN.md](docs/CONTROLLED-E2E-REPAIR-TEST-PLAN.md).
 
 ## 8. Important failure cases
 
@@ -116,10 +116,10 @@ There is currently no authorized disposable setup for steps 5–8. The truthful 
 ## 11. Known limitations
 
 - Not deployed; no hosted judge route exists.
-- No successful live Gabel repair or fresh live before/after preservation proof exists.
+- One successful live Gabel repair and fresh preservation proof exists, but no public judge can currently reproduce it.
 - Current repair validation supports JPEG and PNG images on scheduled X posts only.
 - A media check inspects at most ten assets per request and at most a 64 KiB prefix of each response. It cannot prove whole-file integrity or future availability.
-- The browser application does not create or delete Buffer posts. A local, receipt-bound controlled-test lifecycle tool now exists, but it has not been executed live and is not a general application endpoint.
+- The browser application does not create or delete Buffer posts. The local receipt-bound controlled-test lifecycle tool was executed during controlled live runs; it is not a general application endpoint.
 - There is no background monitoring, automatic repair, bulk edit, or automatic mutation retry.
 - Production requires single-process operation until refresh-token coordination is made safe across instances.
 - Manual accessibility testing, qualified legal review, truthful production contacts, licensing, and infrastructure review remain unresolved.
@@ -129,9 +129,9 @@ There is currently no authorized disposable setup for steps 5–8. The truthful 
 
 | Status | Evidence |
 |---|---|
-| Verified live | OAuth-backed Buffer reads for account, organization, channel, scheduled post, image asset, update capability, and schema/media format; bounded media requests against public controls and sanitized project assets. |
-| Verified by automated tests | 68 unit/security tests and 4 integration tests cover security, isolation, media policy, replacement validation, approval, stale state, field preservation, controlled lifecycle and no-billing media-fixture safeguards, deletion, inactivity retention, and structural accessibility. |
-| Implemented but not tested live | Gabel-prepared `editPost`, pre-mutation revalidation, and fresh post-edit preservation comparison. |
+| Verified live | OAuth-backed Buffer reads for account, organization, channel, scheduled post, image asset, update capability, and schema/media format; bounded media requests; and one controlled assets-only `editPost` with fresh zero-discrepancy preservation verification, separate cleanup, and fixture restoration. |
+| Verified by automated tests | 80 unit/security tests and 5 integration tests cover security, isolation, media policy, replacement validation, approval, stale state, field preservation, verified repaired-state cleanup, controlled lifecycle and no-billing media-fixture safeguards, deletion, inactivity retention, and structural accessibility. |
+| Implemented but not publicly reproducible | The controlled live repair evidence exists, but there is no hosted judge environment, disposable post, or judge account. |
 | Blocked | Hosted judge reproduction, controlled disposable repair, production release, and competition-readiness claim. |
 | Planned | Public deployment and judge reproduction only after the blocking proof and compliance work are complete. |
 

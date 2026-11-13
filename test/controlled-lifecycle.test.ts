@@ -90,6 +90,56 @@ test('controlled lifecycle deletion is receipt-bound, freshly verified, capabili
   store.close();
 });
 
+test('controlled cleanup accepts only the original or uniquely verified repaired disposable state', async () => {
+  const { store, spec, post } = fixture();
+  const receipt: ControlledTestPostReceipt = { ...spec, postId: post.id, text: post.text, createdAt: new Date(now).toISOString() };
+  const replacementUrl = 'https://media.example/replacement';
+  const repaired: BufferPost = { ...post, updatedAt: new Date(now + 1_000).toISOString(), assets: [{ ...post.assets[0], source: replacementUrl }] };
+  const intended = [{ image: { url: replacementUrl, metadata: { altText: 'Disposable Gabel controlled repair test image' } } }];
+  store.db.prepare(`INSERT INTO edit_intents(id,tenant_id,connection_id,post_id,before_json,intended_assets_json,before_fingerprint,status,created_at,expires_at,outcome_json)
+    VALUES(?,?,?,?,?,?,?,'confirmed',?,?,?)`).run('verified-repair', spec.tenantId, spec.connectionId, post.id, JSON.stringify(post),
+      JSON.stringify(intended), 'before-fingerprint', new Date(now).toISOString(), new Date(now + 600_000).toISOString(),
+      JSON.stringify({ comparison: { matches: true, discrepancies: [] } }));
+  store.db.prepare(`INSERT INTO edit_intent_claims(intent_id,tenant_id,claim_id,state,claimed_at,expires_at,mutation_started_at,completed_at)
+    VALUES(?,?,?,'completed',?,?,?,?)`).run('verified-repair', spec.tenantId, 'verified-claim', new Date(now).toISOString(),
+      new Date(now + 600_000).toISOString(), new Date(now).toISOString(), new Date(now).toISOString());
+
+  let current = post;
+  let deletions = 0;
+  const fake = {
+    getPost: async () => ({ post: current }),
+    graphql: async (_tenant: string, _connection: string, _query: string, variables: { input: { id: string } }) => {
+      deletions += 1;
+      return { data: { deletePost: { id: variables.input.id } } };
+    },
+  } as unknown as BufferClient;
+  const service = new ControlledTestPostService(store, fake, undefined, () => now);
+
+  await service.delete(receipt, deleteConfirmation(post.id));
+  current = repaired;
+  await service.delete(receipt, deleteConfirmation(post.id));
+  assert.equal(deletions, 2);
+
+  const rejected: Array<[string, BufferPost]> = [
+    ['identity', { ...repaired, id: 'unrelated-post' }],
+    ['channel', { ...repaired, channelId: 'other-channel' }],
+    ['scheduled time', { ...repaired, dueAt: '2026-11-08T12:00:00.000Z' }],
+    ['text', { ...repaired, text: 'altered text' }],
+    ['media', { ...repaired, assets: [{ ...repaired.assets[0], source: 'https://media.example/unapproved' }] }],
+  ];
+  for (const [label, changed] of rejected) {
+    current = changed;
+    await assert.rejects(service.delete(receipt, deleteConfirmation(post.id)), (error: Error) => {
+      assert.ok(error.message.length > 0, label);
+      return true;
+    });
+  }
+  assert.equal(deletions, 2);
+  await assert.rejects(service.delete(receipt, 'DELETE CONTROLLED TEST POST wrong-id'), /exactly match/);
+  assert.equal(deletions, 2);
+  store.close();
+});
+
 test('controlled lifecycle refuses deletion when the exact post no longer matches the receipt', async () => {
   const { store, spec, post } = fixture();
   const receipt: ControlledTestPostReceipt = { ...spec, postId: post.id, text: post.text, createdAt: new Date(now).toISOString() };

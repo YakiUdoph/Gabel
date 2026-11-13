@@ -20,7 +20,7 @@ const candidate = process.argv[2];
 if (!candidate) throw new Error('A replacement media URL argument is required');
 
 const config: Config = {
-  appOrigin: process.env.APP_ORIGIN ?? 'https://localhost', port: 0,
+  appOrigin: process.env.APP_ORIGIN ?? 'https://localhost', tlsOriginHostname: "localhost", port: 0,
   bufferClientId: required('BUFFER_CLIENT_ID'), bufferClientSecret: process.env.BUFFER_CLIENT_SECRET?.trim() || undefined,
   bufferRedirectUri: process.env.BUFFER_REDIRECT_URI ?? 'https://localhost/auth/buffer/callback',
   encryptionKey: key('APP_ENCRYPTION_KEY'), cookieSecret: Buffer.alloc(32),

@@ -19,7 +19,7 @@ import { renderPage } from '../src/views.ts';
 import { privacyNotice, termsOfService } from '../src/legal.ts';
 
 const config = (): Config => ({
-  appOrigin: 'https://localhost:3443', port: 3443, bufferClientId: 'client-id', bufferClientSecret: 'client-secret',
+  appOrigin: 'https://localhost:3443', tlsOriginHostname: "localhost", port: 3443, bufferClientId: 'client-id', bufferClientSecret: 'client-secret',
   bufferRedirectUri: 'https://localhost:3443/auth/buffer/callback', encryptionKey: randomBytes(32), cookieSecret: randomBytes(32),
   databasePath: ':memory:', requestTimeoutMs: 1000,
   operatorName: 'Example Operator', supportEmail: 'support@example.test', privacyEmail: 'privacy@example.test',

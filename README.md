@@ -2,7 +2,7 @@
 
 Gabel finds externally hosted media that may have become unavailable after a Buffer API post was scheduled. It lets the user check the media, review a replacement, and approve an asset-only edit without intentionally changing the post's text, channel, or scheduled time.
 
-Gabel is a proof-stage Buffer Commit 2026 project. It uses genuine Buffer data and has no seeded demo account or fake posts. **Not deployed yet. The complete live repair has not yet been verified.**
+Gabel is a proof-stage Buffer Commit 2026 project. It uses genuine Buffer data and has no seeded demo account or fake posts. **Not deployed yet.** One controlled disposable-post repair was verified live on November 8, 2026, then the post was deleted and the controlled media fixture was restored. There is no public judge sandbox or reusable hosted test account.
 
 ## How to Test Gabel
 
@@ -40,7 +40,7 @@ Stop here for a read-only evaluation. To test repair, use only a disposable sche
 10. Gabel fetches the post and replacement again immediately before the edit. After Buffer responds, Gabel fetches the post once more and compares the media, text, channel, and scheduling fields. It reports an uncertain or mismatched result as ambiguous rather than as success.
 11. Open **Account** to disconnect. Type `DISCONNECT BUFFER` to delete Gabel's encrypted Buffer credentials and cached connection data. Revoke Gabel in Buffer settings as well if you want Buffer to invalidate the grant. `DELETE GABEL DATA` removes the browser account and its local Gabel records; neither action deletes Buffer posts.
 
-The repository has live evidence for Buffer account, organization, channel, scheduled-post, asset, schema, and read-only media operations. It does **not** have a verified live `editPost` repair or fresh live before/after preservation result. See [JUDGE.md](JUDGE.md) for the evaluation guide and blockers.
+The repository has live evidence for Buffer account, organization, channel, scheduled-post, asset, schema, read-only media operations, and one explicitly approved assets-only `editPost` followed by a fresh zero-discrepancy preservation comparison. That controlled post was deleted afterward, so the result is evidence—not a currently reproducible judge sandbox. See [JUDGE.md](JUDGE.md) for the evaluation guide and remaining blockers.
 
 ### Route B: Developer / local testing
 
@@ -108,8 +108,8 @@ For an approved production deployment, follow [docs/PRODUCTION-DEPLOYMENT.md](do
 | Implemented | Buffer OAuth with PKCE, encrypted server-side tokens, scheduled-post retrieval, bounded media checks, X JPEG/PNG replacement validation, explicit single-use approval, stale-state checks, assets-only editing, fresh after-read comparison, disconnect, deletion, and retention controls. |
 | Verified with the live Buffer API | Account, organization, channel, scheduled post, image asset, update capability, schema/media-format reads, and sanitized read-only media evidence. |
 | Verified by automated tests | OAuth and token handling, tenant isolation, media safety, replacement rules, asset ordering and preservation, exact approval, stale-state rejection, ambiguity handling, deletion, retention, and structural accessibility checks. Mocked Buffer tests are not live evidence. |
-| Not yet tested live | A Gabel-prepared and explicitly approved `editPost` repair followed by a fresh live preservation comparison. |
-| Blocked | Public judge reproduction and production release. There is no deployment or controlled disposable-post setup, and the compliance gate remains failed. |
+| Verified with a controlled live mutation | One receipt-bound disposable X image post completed DETECT → REPAIR → VERIFY on November 8, 2026: HTTP 410 detection, validated replacement, exact approval, one assets-only `editPost`, and a fresh zero-discrepancy preservation comparison. Cleanup and fixture restoration were separately authorized and verified. |
+| Blocked | Public judge reproduction and production release. There is no deployment, current disposable-post setup, or judge account, and the compliance gate remains failed. |
 | Planned, not implemented | Background monitoring, automatic repair, bulk editing, and support for replacement workflows beyond the current X JPEG/PNG image path. |
 
 ## How Gabel protects a repair
@@ -125,7 +125,7 @@ Preparing an edit builds the complete ordered asset list and records the current
 - `src/media-security.ts` — bounded HTTPS media probing and SSRF protections.
 - `src/replacement-validation.ts` — current X JPEG/PNG replacement requirements and fresh-evidence checks.
 - `src/edit.ts` — complete asset construction, approval, mutation, and verification.
-- `src/controlled-test-post.ts` and `scripts/controlled-buffer-post.ts` — local, receipt-bound disposable-post creation/inspection/cleanup tooling; it is not an application endpoint and has not been run live.
+- `src/controlled-test-post.ts` and `scripts/controlled-buffer-post.ts` — local, receipt-bound disposable-post creation/inspection/cleanup tooling; it is not an application endpoint. It was used in controlled live runs and now accepts cleanup only for the signed original state or one uniquely completed, verified Gabel repair state.
 - `src/db.ts` — tenant-scoped SQLite persistence, deletion, and retention.
 - `test/` — automated tests; mocked responses are never presented as live Buffer evidence.
 - `docs/BUFFER-LIVE-INTEGRATION-REPORT.md` — sanitized live/read evidence.
@@ -137,4 +137,4 @@ Preparing an edit builds the complete ordered asset list and records the current
 
 ## Release status
 
-The current compliance report is [docs/COMPLIANCE-PRIVACY-SECURITY-ACCESSIBILITY-GATE.md](docs/COMPLIANCE-PRIVACY-SECURITY-ACCESSIBILITY-GATE.md), with the latest production execution record in [docs/PRODUCTION-DEPLOYMENT.md](docs/PRODUCTION-DEPLOYMENT.md). Production compliance remains **FAILED**. Application-level production validation, health checks, safe logging, graceful shutdown, schema readiness, inactivity deletion, automated browser/accessibility checks, and a repeatable container procedure are implemented, but public release is still blocked by verified production contacts, qualified legal review, manual assistive-technology testing, live repair evidence, an approved public deployment, and operator infrastructure evidence. Do not treat this repository as a production certification or competition-ready deployment.
+The current compliance report is [docs/COMPLIANCE-PRIVACY-SECURITY-ACCESSIBILITY-GATE.md](docs/COMPLIANCE-PRIVACY-SECURITY-ACCESSIBILITY-GATE.md), with the latest production execution record in [docs/PRODUCTION-DEPLOYMENT.md](docs/PRODUCTION-DEPLOYMENT.md). Production compliance remains **FAILED**. Application-level production validation, health checks, safe logging, graceful shutdown, schema readiness, inactivity deletion, automated browser/accessibility checks, and a repeatable container procedure are implemented, but public release is still blocked by verified production contacts, qualified legal review, manual assistive-technology testing, an approved public deployment, judge reproduction, and operator infrastructure evidence. Do not treat this repository as a production certification or competition-ready deployment.

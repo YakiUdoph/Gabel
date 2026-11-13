@@ -1,7 +1,8 @@
 import { createHmac } from 'node:crypto';
 import type { Store } from './db.ts';
 import { BufferClient, POST_FIELDS } from './buffer.ts';
-import type { BufferPost } from './types.ts';
+import { comparePost } from './edit.ts';
+import type { AssetInput, BufferPost } from './types.ts';
 import { probeMediaUrl, type MediaProbeResult } from './media-security.ts';
 import { safeEqual } from './security.ts';
 
@@ -78,6 +79,32 @@ export function assertControlledPostMatches(post: BufferPost, receipt: Controlle
   if (!Array.isArray(post.tags) || post.tags.length !== 0) throw new Error('Controlled post tags are not empty');
   if (!Array.isArray(post.assets) || post.assets.length !== 1 || post.assets[0].type !== 'image'
     || post.assets[0].source !== receipt.originalUrl) throw new Error('Controlled post image does not match the reviewed original');
+}
+
+function assertAuthorizedRepairedPostMatches(
+  store: Store,
+  post: BufferPost,
+  receipt: ControlledTestPostReceipt,
+  originalMismatch: unknown,
+): void {
+  const rows = store.db.prepare(`SELECT i.before_json,i.intended_assets_json,i.outcome_json
+    FROM edit_intents i INNER JOIN edit_intent_claims c ON c.intent_id=i.id AND c.tenant_id=i.tenant_id
+    WHERE i.tenant_id=? AND i.connection_id=? AND i.post_id=? AND i.status='confirmed' AND c.state='completed'`)
+    .all(receipt.tenantId, receipt.connectionId, receipt.postId) as Array<Record<string, string>>;
+  if (rows.length === 0) throw originalMismatch;
+  if (rows.length !== 1) throw new Error('Controlled post has more than one verified repair record; cleanup requires manual review');
+
+  const before = JSON.parse(rows[0].before_json) as BufferPost;
+  const intended = JSON.parse(rows[0].intended_assets_json) as AssetInput[];
+  const outcome = JSON.parse(rows[0].outcome_json ?? '{}') as { comparison?: { matches?: boolean } };
+  assertControlledPostMatches(before, receipt);
+  if (outcome.comparison?.matches !== true) throw new Error('Controlled repair evidence does not contain a successful fresh comparison');
+  if (intended.length !== 1 || !('image' in intended[0]) || intended[0].image.url === receipt.originalUrl) {
+    throw new Error('Controlled repair evidence does not authorize exactly one replacement image');
+  }
+  directPublicUrl(intended[0].image.url);
+  const comparison = comparePost(before, post, intended);
+  if (!comparison.matches) throw new Error(`Controlled repaired post changed unexpectedly: ${comparison.discrepancies.join('; ')}`);
 }
 
 export function sealControlledReceipt(receipt: ControlledTestPostReceipt, secret: Buffer): string {
@@ -170,10 +197,20 @@ export class ControlledTestPostService {
     return fresh.post;
   }
 
+  private async inspectForDeletion(receipt: ControlledTestPostReceipt): Promise<BufferPost> {
+    const fresh = await this.buffer.getPost(receipt.tenantId, receipt.connectionId, receipt.postId);
+    try {
+      assertControlledPostMatches(fresh.post, receipt);
+    } catch (error) {
+      assertAuthorizedRepairedPostMatches(this.store, fresh.post, receipt, error);
+    }
+    return fresh.post;
+  }
+
   async delete(receipt: ControlledTestPostReceipt, confirmation: string): Promise<{ id: string; requestId?: string }> {
     if (confirmation !== deleteConfirmation(receipt.postId)) throw new Error(`Confirmation must exactly match ${deleteConfirmation(receipt.postId)}`);
     if (!this.store.getConnection(receipt.tenantId, receipt.connectionId)) throw new Error('Buffer connection does not belong to this tenant');
-    const fresh = await this.inspect(receipt);
+    const fresh = await this.inspectForDeletion(receipt);
     if (!fresh.allowedActions.includes('deletePost')) throw new Error('Buffer does not currently authorize deletion of this controlled post');
     const result = await this.buffer.graphql<{ deletePost: { id?: string; message?: string } }>(receipt.tenantId, receipt.connectionId, `
       mutation GabelDeleteControlledTestPost($input: DeletePostInput!) {

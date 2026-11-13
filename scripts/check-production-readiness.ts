@@ -16,8 +16,8 @@ createSecureContext({ key, cert: certificate });
 const x509 = new X509Certificate(certificate);
 const now = Date.now();
 if (Date.parse(x509.validFrom) > now || Date.parse(x509.validTo) <= now) throw new Error('The configured TLS certificate is not currently valid');
-const publicHostname = new URL(config.appOrigin).hostname;
-if (!x509.checkHost(publicHostname)) throw new Error('The configured TLS certificate does not cover APP_ORIGIN');
+const originTlsHostname = config.tlsOriginHostname;
+if (!x509.checkHost(originTlsHostname)) throw new Error('The configured TLS certificate does not cover TLS_ORIGIN_HOSTNAME');
 
 const store = new Store(config.databasePath);
 try {

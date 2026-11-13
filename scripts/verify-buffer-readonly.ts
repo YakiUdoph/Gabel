@@ -18,7 +18,7 @@ function key(name: string): Buffer {
 }
 
 const config: Config = {
-  appOrigin: process.env.APP_ORIGIN ?? 'https://localhost',
+  appOrigin: process.env.APP_ORIGIN ?? 'https://localhost', tlsOriginHostname: "localhost",
   port: 0,
   bufferClientId: required('BUFFER_CLIENT_ID'),
   bufferClientSecret: process.env.BUFFER_CLIENT_SECRET?.trim() || undefined,

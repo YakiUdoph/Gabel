@@ -15,7 +15,7 @@ Status: implemented deployment procedure; not deployed or production-certified. 
 | Qualified review of the draft privacy notice and terms for the operator and launch markets | Must fix before submission | Not completed. The pages deliberately remain drafts and make no compliance certification. |
 | Manual keyboard, screen-reader, forced-colors, and 200%/400% zoom review | Must fix before submission | Not completed. Automated structural/contrast/browser checks are not a conformance claim. |
 | Public judge URL and a safe read-only judge walkthrough | Must fix before submission | No deployment exists. Configure only after deployment approval and a read-only smoke test. |
-| Live controlled repair and fresh preservation proof | Must fix before a complete competition claim | Still absent and prohibited in this deployment-preparation task. Never substitute fixture evidence. |
+| Live controlled repair and fresh preservation proof | Verified live; not a deployment gate | One controlled disposable-post repair completed DETECT → REPAIR → VERIFY on 2026-11-08 with a fresh zero-discrepancy preservation comparison, separately authorized cleanup, and media-fixture restoration. This evidence does not create a public judge path or authorize another mutation. |
 | Durable refresh/edit coordination | Implemented for the current architecture | SQLite claims and fenced compare-and-swap coordinate processes using the same database. A managed coordination/database design remains mandatory before multi-host horizontal scaling. |
 | Managed database migration away from SQLite | Optional improvement | Not required for the current single-process architecture; reassess with scale and availability requirements. |
 
@@ -132,7 +132,7 @@ Gabel handles `SIGTERM`/`SIGINT`, stops accepting work, closes HTTPS, and closes
 
 ## Release decision boundary
 
-This procedure and image are **implemented but not deployed**. Passing the automated preflight is necessary but does not prove infrastructure, legal, accessibility, judge access, or live repair compliance. Deployment and production-compliance status require separate operator evidence and approval.
+This procedure and image are **implemented but not deployed**. Passing the automated preflight is necessary but does not prove infrastructure, legal, accessibility, or judge access. Deployment and production-compliance status require separate operator evidence and approval.
 
 ## Verification record — 2026-11-07
 
@@ -168,3 +168,9 @@ Remaining classification:
 | Multi-host coordination or managed database | Optional for one-replica launch; mandatory before horizontal scaling | Current durable claims cover processes sharing one SQLite database; distributed storage/topology remains unverified and out of scope |
 
 Production compliance remains **FAIL** because the operator/infrastructure, manual accessibility, legal, public judge-access, and live-repair evidence above do not yet exist.
+
+## Release-status addendum — 2026-11-13
+
+The November 7 verification record above is preserved as dated history. Its live-repair blocker was resolved on November 8 by the controlled receipt-bound repair, fresh preservation comparison, separately authorized deletion, and controlled-media restoration recorded in `TASKS.md` and `PROGRESS.md`. No public deployment or judge sandbox resulted from that run.
+
+The current deployment decision remains **NO-GO / production compliance FAIL** until the operator supplies and verifies the public hostname and exact Buffer callback, TLS and protected secrets, truthful public contacts, one-replica persistent-volume topology, egress/firewall policy, monitoring, incident response, and witnessed backup/restore; qualified legal review and hands-on accessibility testing must also be completed. After explicit deployment approval, follow the build/preflight, backup, single-replica start, health/header, interactive OAuth, and read-only Buffer verification steps above. Stop before any replacement preparation or post mutation.

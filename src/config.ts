@@ -11,6 +11,7 @@ export type Config = {
   databasePath: string;
   tlsKeyPath?: string;
   tlsCertPath?: string;
+  tlsOriginHostname: string;
   requestTimeoutMs: number;
   operatorName: string;
   supportEmail: string;
@@ -97,6 +98,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     databasePath,
     tlsKeyPath: env.TLS_KEY_PATH ? resolve(env.TLS_KEY_PATH) : undefined,
     tlsCertPath: env.TLS_CERT_PATH ? resolve(env.TLS_CERT_PATH) : undefined,
+    tlsOriginHostname: (() => {
+      const hostname = env.TLS_ORIGIN_HOSTNAME?.trim() || appUrl.hostname;
+      if (!/^[a-z0-9.-]+$/i.test(hostname) || hostname.length > 253 ||
+          hostname.startsWith('.') || hostname.endsWith('.') ||
+          hostname.includes('..')) {
+        throw new Error('TLS_ORIGIN_HOSTNAME must be a valid DNS hostname');
+      }
+      return hostname;
+    })(),
     requestTimeoutMs: integer('BUFFER_REQUEST_TIMEOUT_MS', env.BUFFER_REQUEST_TIMEOUT_MS ?? '15000', 1_000, 60_000),
     operatorName,
     supportEmail: contactEmail('SUPPORT_EMAIL', env, production),
