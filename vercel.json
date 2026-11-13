@@ -1,0 +1,15 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/index.ts": {
+      "maxDuration": 60,
+      "regions": ["iad1"]
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/:gabelPath*",
+      "destination": "/api/index?__gabel_path=:gabelPath*"
+    }
+  ]
+}

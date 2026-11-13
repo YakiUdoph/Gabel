@@ -4,6 +4,8 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { loadConfig } from './config.ts';
 import { Store } from './db.ts';
+import { PostgresStore } from './postgres-db.ts';
+import type { AppStore } from './persistence.ts';
 import { BufferClient, BufferError, exchangeAuthorizationCode, safeBufferErrorDiagnostic } from './buffer.ts';
 import { EditService } from './edit.ts';
 import { beginOAuth, consumeOAuth } from './oauth.ts';
@@ -18,10 +20,17 @@ import { ReplacementValidationError } from './replacement-validation.ts';
 import { PublicError } from './errors.ts';
 
 const config = loadConfig();
-if (!config.tlsKeyPath || !config.tlsCertPath) throw new Error('TLS_KEY_PATH and TLS_CERT_PATH are required because Buffer requires HTTPS redirect URIs');
-const store = new Store(config.databasePath);
-const retentionTimer = setInterval(() => store.purgeExpiredData(), 60_000);
-retentionTimer.unref();
+const isVercel = Boolean(process.env.VERCEL);
+if (!isVercel && (!config.tlsKeyPath || !config.tlsCertPath)) throw new Error('TLS_KEY_PATH and TLS_CERT_PATH are required because Buffer requires HTTPS redirect URIs');
+const store: AppStore = isVercel ? new PostgresStore(config.databaseUrl!) : new Store(config.databasePath);
+let storeReady: Promise<void> | undefined;
+function ensureStoreReady(): Promise<void> {
+  if (!(store instanceof PostgresStore)) return Promise.resolve();
+  storeReady ??= store.migrate().catch((error: unknown) => { storeReady = undefined; throw error; });
+  return storeReady;
+}
+const retentionTimer = !isVercel ? setInterval(() => { void store.purgeExpiredData(); }, 60_000) : undefined;
+retentionTimer?.unref();
 const buffer = new BufferClient(config, store);
 const edits = new EditService(store, buffer);
 
@@ -43,14 +52,14 @@ function setSessionCookies(res: ServerResponse, id: string, csrf: string): void 
   setCookie(res, `gabel_csrf=${signCookie(csrf, config.cookieSecret)}`, false);
 }
 
-function session(req: IncomingMessage, res: ServerResponse): Context {
+async function session(req: IncomingMessage, res: ServerResponse): Promise<Context> {
   const jar = cookies(req);
   const rawId = verifyCookie(jar.gabel_session, config.cookieSecret);
   const rawCsrf = verifyCookie(jar.gabel_csrf, config.cookieSecret);
   if (rawId && rawCsrf) {
-    const row = store.getSession(sha256(rawId));
+    const row = await store.getSession(sha256(rawId));
     if (row && row.csrf_hash === sha256(rawCsrf)) {
-      store.touchSession(sha256(rawId), new Date(Date.now() + SESSION_COOKIE_MAX_AGE_SECONDS * 1000).toISOString());
+      await store.touchSession(sha256(rawId), new Date(Date.now() + SESSION_COOKIE_MAX_AGE_SECONDS * 1000).toISOString());
       // Refresh attributes so sessions created before the OAuth-compatible SameSite policy migrate safely.
       setSessionCookies(res, rawId, rawCsrf);
       return { tenantId: String(row.tenant_id), sessionHash: sha256(rawId), csrf: rawCsrf };
@@ -59,8 +68,8 @@ function session(req: IncomingMessage, res: ServerResponse): Context {
   const tenantId = randomUUID();
   const id = randomToken();
   const csrf = randomToken();
-  store.createTenant(tenantId);
-  store.createSession({ idHash: sha256(id), tenantId, csrfHash: sha256(csrf), expiresAt: new Date(Date.now() + 7 * 86400_000).toISOString() });
+  await store.createTenant(tenantId);
+  await store.createSession({ idHash: sha256(id), tenantId, csrfHash: sha256(csrf), expiresAt: new Date(Date.now() + 7 * 86400_000).toISOString() });
   setSessionCookies(res, id, csrf);
   return { tenantId, sessionHash: sha256(id), csrf };
 }
@@ -257,27 +266,61 @@ function renderRepairResult(intent: Record<string, string>): { status: number; b
   return { status: simulated || verified ? 200 : 409, body: `${fixtureNotice(outcome)}<section class="result-head ${verified || (simulated && confirmedState) ? 'result-verified' : ambiguous || (simulated && ambiguousState) ? 'result-ambiguous' : 'result-failed'}"><p class="eyebrow">Verify</p><span class="result-label">${label}</span><h1>${heading}</h1><p class="lede">${explanation}</p></section>
     <div class="notice ${verified ? 'ok' : simulated ? 'info' : 'warn'}" role="status"><strong>${label}</strong><p>${esc(details)}</p></div>
     <section class="panel verification-proof"><h2>Verification evidence</h2><dl class="proof-list"><div><dt>Buffer refetch</dt><dd>${esc(evidenceLabel)}</dd></div><div><dt>Protected-field comparison</dt><dd>${simulated ? `Fixture state: ${outcome.comparison?.matches === true ? 'matched' : outcome.comparison ? 'not matched' : 'not completed'}` : outcome.comparison?.matches === true ? 'All compared fields matched' : outcome.comparison ? 'Differences or missing evidence found' : 'Not completed'}</dd></div><div><dt>Recorded outcome</dt><dd>${esc(simulated ? `Local fixture: ${intent.status}` : intent.status)}</dd></div></dl>${technical}</section>
-    <a class="button" href="/">Return to scheduled posts</a>` };
+    <a class="button" href="/workspace">Return to scheduled posts</a>` };
+}
+
+function renderLanding(): string {
+  return `<section class="landing-hero" aria-labelledby="landing-title">
+    <div class="landing-kicker reveal reveal-1">Buffer-native scheduled-media recovery</div>
+    <h1 id="landing-title" class="reveal reveal-2">Keep scheduled posts <em>ready.</em></h1>
+    <p class="landing-lede reveal reveal-3">Detect unavailable images before publication, approve one precise repair, and verify the fresh Buffer result.</p>
+    <div class="landing-actions reveal reveal-4"><a class="button" href="/workspace">Open workspace</a><a class="button secondary" href="#how-it-works">See how it works</a></div>
+  </section>
+  <section id="product" class="product-stage reveal reveal-4" aria-label="Illustrative Gabel workflow preview">
+    <div class="stage-bar"><span>Illustrative workflow</span><span>No account data shown</span></div>
+    <div class="stage-grid">
+      <div class="stage-sidebar"><strong>Scheduled media</strong><span class="stage-nav active">Review queue</span><span class="stage-nav">Evidence</span><span class="stage-nav">Account controls</span></div>
+      <div class="stage-main"><div class="stage-title"><div><small>DETECT</small><h2>One clear path from evidence to outcome.</h2></div><span class="status status-problem">PROBLEM</span></div>
+      <div class="stage-workflow" aria-label="Detect, review, approve, verify"><span class="done">01 <b>Detect</b></span><span>02 <b>Review</b></span><span>03 <b>Approve</b></span><span>04 <b>Verify</b></span></div>
+      <div class="stage-card"><div><small>Protected change</small><strong>Replace only the affected image</strong><p>Text, timing, channel, metadata, tags, and media order remain guarded.</p></div><span class="stage-arrow" aria-hidden="true">&#8594;</span></div></div>
+    </div>
+  </section>
+  <section id="how-it-works" class="landing-section"><div class="section-intro"><p class="eyebrow">How it works</p><h2>Evidence first. Mutation last.</h2><p>Gabel keeps every step explicit so a repair never quietly becomes a rewrite.</p></div>
+    <ol class="process-grid"><li><span>01</span><h3>Detect</h3><p>Retrieve genuine scheduled posts and run a fresh, bounded media check.</p></li><li><span>02</span><h3>Review</h3><p>Show the affected position, the evidence timestamp, and the exact proposed replacement.</p></li><li><span>03</span><h3>Approve</h3><p>Require a one-time typed confirmation immediately before the Buffer edit.</p></li><li><span>04</span><h3>Verify</h3><p>Refetch the post and compare every protected field before recording success.</p></li></ol>
+  </section>
+  <section id="safeguards" class="landing-section safeguard-band"><div><p class="eyebrow">Safeguards</p><h2>A narrow repair surface by design.</h2></div><div class="safeguard-list"><p><strong>Fresh proof</strong><span>Stale or inconclusive checks never unlock repair.</span></p><p><strong>Explicit approval</strong><span>No mutation is sent from the review screen alone.</span></p><p><strong>Honest outcomes</strong><span>Ambiguous verification is never presented as success.</span></p></div></section>
+  <section id="questions" class="landing-section questions"><div><p class="eyebrow">Questions</p><h2>Built for the moment between scheduling and publication.</h2></div><div><details><summary>Does Gabel edit post copy or timing?</summary><p>No. The repair is limited to approved image positions, with protected fields compared again after the edit.</p></details><details><summary>Does a READY check guarantee publication?</summary><p>No. It records a bounded result at a point in time; Buffer and social platforms still control publication.</p></details><details><summary>Is sample account data displayed?</summary><p>No. The workspace shows genuine authorized Buffer data or an honest empty state.</p></details></div></section>
+  <section class="landing-cta"><p class="eyebrow">DETECT &#8594; REPAIR &#8594; VERIFY</p><h2>Give every scheduled image a fair second check.</h2><a class="button" href="/workspace">Open Gabel workspace</a></section>`;
 }
 
 async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? '/', config.appOrigin);
+  const rewrittenPath = url.searchParams.get('__gabel_path');
+  if (isVercel && rewrittenPath !== null) {
+    url.pathname = `/${rewrittenPath.replace(/^\/+/, '')}`;
+    url.searchParams.delete('__gabel_path');
+  }
   if (req.method === 'GET' && url.pathname === '/health/live') {
     json(res, 200, { status: 'ok' }); return;
   }
+  await ensureStoreReady();
   if (req.method === 'GET' && url.pathname === '/health/ready') {
     try {
-      const health = store.healthCheck();
+      const health = await store.healthCheck();
       json(res, health.ready ? 200 : 503, { status: health.ready ? 'ready' : 'not_ready', schemaVersion: health.schemaVersion });
     } catch {
       json(res, 503, { status: 'not_ready' });
     }
     return;
   }
-  const ctx = session(req, res);
   if (req.method === 'GET' && url.pathname === '/') {
-    const connection = store.getConnection(ctx.tenantId);
-    const dashboard = store.listDashboard(ctx.tenantId);
+    html(res, 200, page('Keep scheduled posts ready', renderLanding()));
+    return;
+  }
+  const ctx = await session(req, res);
+  if (req.method === 'GET' && url.pathname === '/workspace') {
+    const connection = await store.getConnection(ctx.tenantId);
+    const dashboard = await store.listDashboard(ctx.tenantId);
     const channels = dashboard.channels as Array<Record<string, unknown>>;
     const posts = dashboard.posts as Array<Record<string, unknown>>;
     const activeChannels = channels.filter((channel) => !channel.is_disconnected && !channel.is_locked);
@@ -301,14 +344,14 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
   }
   const postMatch = url.pathname.match(/^\/posts\/([^/]+)$/);
   if (req.method === 'GET' && postMatch) {
-    const connection = store.getConnection(ctx.tenantId);
-    if (!connection) { redirect(res, '/'); return; }
+    const connection = await store.getConnection(ctx.tenantId);
+    if (!connection) { redirect(res, '/workspace'); return; }
     const postId = decodeURIComponent(postMatch[1]);
-    const post = store.getDashboardPost(ctx.tenantId, connection.id, postId);
-    if (!post) { html(res, 404, page('Post not found', '<div class="empty"><h1>Post not found</h1><p>Refresh from Buffer to retrieve the current scheduled queue.</p><a class="button" href="/">Return to posts</a></div>')); return; }
+    const post = await store.getDashboardPost(ctx.tenantId, connection.id, postId);
+    if (!post) { html(res, 404, page('Post not found', '<div class="empty"><h1>Post not found</h1><p>Refresh from Buffer to retrieve the current scheduled queue.</p><a class="button" href="/workspace">Return to posts</a></div>')); return; }
     const state = typeof post.media_status === 'string' && post.media_status in mediaStateContent ? post.media_status as MediaState : 'unchecked';
     const summary = post.summary_json ? JSON.parse(String(post.summary_json)) as Array<{ position: number; type: string; label: string; detail: string; httpStatus?: number }> : [];
-    const problemPositions = store.getFreshConfirmedProblemPositions(ctx.tenantId, connection.id, postId);
+    const problemPositions = await store.getFreshConfirmedProblemPositions(ctx.tenantId, connection.id, postId);
     const freshProblem = problemPositions.length > 0;
     const firstProblem = summary.find((item) => item.label === 'CONFIRMED PROBLEM');
     const affectedPosition = firstProblem?.position ?? problemPositions[0] ?? 0;
@@ -321,52 +364,52 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
     const evidenceRows = summary.map((item) => `<tr><td>Image ${esc(item.position + 1)}</td><td>${mediaPill(item.label === 'READY' ? 'ready' : item.label === 'CONFIRMED PROBLEM' ? 'confirmed_problem' : item.label === 'UNSUPPORTED FILE' ? 'unsupported_file' : 'could_not_verify')}</td><td>${esc(item.detail)}${item.httpStatus ? ` HTTP ${esc(item.httpStatus)}.` : ''}</td></tr>`).join('');
     const checkForm = `<form method="post" action="/media/check" class="post-actions"><input type="hidden" name="_csrf" value="${esc(ctx.csrf)}"><input type="hidden" name="post_id" value="${esc(postId)}"><button class="${freshProblem ? 'secondary' : ''}">${state === 'unchecked' ? 'Check media now' : 'Run a fresh check'}</button><small>The check may take several seconds.</small></form>`;
     const replacement = freshProblem ? `<section class="panel repair-panel"><p class="eyebrow">Next valid action</p><h2>Replace image ${problemPositions[0] + 1}</h2><p>Enter one stable public JPEG or PNG URL. Gabel will not accept it until the image passes network, format, size, and dimension validation.</p><form class="stack" method="post" action="/edits/prepare"><input type="hidden" name="_csrf" value="${esc(ctx.csrf)}"><input type="hidden" name="post_id" value="${esc(postId)}">${problemPositions.length > 1 ? `<div class="field"><label for="affected-position">Affected image</label><select id="affected-position" name="replacement_position">${problemPositions.map((position) => `<option value="${position}">Image ${position + 1}</option>`).join('')}</select></div>` : `<input type="hidden" name="replacement_position" value="${problemPositions[0]}"><p class="affected-media"><strong>Affected image</strong><span>Position ${problemPositions[0] + 1}</span></p>`}<div class="field"><label for="replacement-url">Replacement image URL</label><input id="replacement-url" name="replacement_url" type="url" inputmode="url" placeholder="https://media.example/image.jpg" aria-describedby="replacement-help" required><small id="replacement-help">HTTPS only. Use a direct, public URL without a login or short-lived signature.</small></div><button>Validate image and review change</button></form></section>` : `<section class="panel locked-panel"><p class="eyebrow">Repair locked</p><h2>${state === 'confirmed_problem' ? 'Fresh evidence is required.' : 'No confirmed repairable problem.'}</h2><p>${state === 'confirmed_problem' ? 'The earlier problem is more than ten minutes old. Run the check again before entering a replacement.' : 'Uncertain, unsupported, ready, and unchecked results never unlock repair.'}</p>${checkForm}</section>`;
-    html(res, 200, page(heading, `<p><a href="/">← All scheduled posts</a></p><section class="detail-head"><div><p class="eyebrow">Media status</p><h1>${esc(heading)}</h1><p class="lede">${esc(post.channel_display_name ?? post.channel_name ?? 'Buffer channel')} · scheduled ${esc(formatDate(post.due_at))}</p></div>${mediaPill(state)}</section>
+    html(res, 200, page(heading, `<p><a href="/workspace">← All scheduled posts</a></p><section class="detail-head"><div><p class="eyebrow">Media status</p><h1>${esc(heading)}</h1><p class="lede">${esc(post.channel_display_name ?? post.channel_name ?? 'Buffer channel')} · scheduled ${esc(formatDate(post.due_at))}</p></div>${mediaPill(state)}</section>
       <div class="detail-grid"><section id="media" class="panel evidence-panel"><p class="eyebrow">Why Gabel reached this result</p><h2>${freshProblem ? `Image ${affectedPosition + 1} has a confirmed failure` : mediaStateContent[state].label}</h2><p>${esc(firstProblem?.detail ?? mediaStateContent[state].detail)}${firstProblem?.httpStatus ? ` The media server returned HTTP ${esc(firstProblem.httpStatus)}.` : ''}</p>${post.checked_at ? `<p class="evidence-time"><strong>Evidence recorded</strong><span>${esc(formatDate(post.checked_at))}</span></p>` : ''}${freshProblem ? checkForm : ''}<details class="evidence-details"><summary>Technical evidence</summary>${summary.length ? `<div class="table-wrap"><table><caption>Sanitized media evidence; URLs are not displayed</caption><thead><tr><th scope="col">Media</th><th scope="col">Result</th><th scope="col">Response</th></tr></thead><tbody>${evidenceRows}</tbody></table></div>` : '<p>No media evidence has been recorded.</p>'}<p>Post reference ${esc(postReference(postId))}. The bounded check reads at most 64 KiB and cannot guarantee future publication.</p></details></section>${replacement}</div>`));
     return;
   }
   if (req.method === 'GET' && url.pathname === '/auth/buffer/start') {
-    const existing = store.getConnection(ctx.tenantId);
+    const existing = await store.getConnection(ctx.tenantId);
     if (existing) throw new PublicError(existing.status === 'reauthorization_required'
       ? 'This Buffer connection needs reauthorization. Use Reconnect Buffer so Gabel can verify the account before replacing credentials.'
       : 'This Gabel account already has an active Buffer connection.', 409, 'connection_already_exists');
-    const auth = beginOAuth(store, config, ctx.sessionHash);
+    const auth = await beginOAuth(store, config, ctx.sessionHash);
     redirect(res, auth.url);
     return;
   }
   if (req.method === 'POST' && url.pathname === '/auth/buffer/reconnect') {
     const body = await form(req, ctx);
     const connectionId = body.get('connection_id') ?? '';
-    const connection = store.getConnection(ctx.tenantId, connectionId);
+    const connection = await store.getConnection(ctx.tenantId, connectionId);
     if (!connection) throw new PublicError('The Buffer connection was not found for this Gabel account.', 404, 'connection_not_found');
-    if (connection.status !== 'reauthorization_required') { redirect(res, '/'); return; }
-    const auth = beginOAuth(store, config, ctx.sessionHash, { connectionId: connection.id, expectedTokenVersion: connection.token_version });
+    if (connection.status !== 'reauthorization_required') { redirect(res, '/workspace'); return; }
+    const auth = await beginOAuth(store, config, ctx.sessionHash, { connectionId: connection.id, expectedTokenVersion: connection.token_version });
     redirect(res, auth.url);
     return;
   }
   if (req.method === 'GET' && url.pathname === '/auth/buffer/callback') {
     const returnedState = url.searchParams.get('state') ?? '';
-    const oauth = consumeOAuth(store, config, ctx.sessionHash, returnedState);
+    const oauth = await consumeOAuth(store, config, ctx.sessionHash, returnedState);
     if (!oauth) { html(res, 403, page('Reconnect stopped', '<div class="error"><h1>This Buffer authorization link is invalid or expired</h1><p>Return to Gabel and start Reconnect Buffer again. No credentials were changed.</p></div>')); return; }
     const operation = oauth.reconnect ? 'buffer_reauthorization' : 'oauth_authorization';
     if (url.searchParams.has('error')) {
-      store.addEvidence({ id: randomUUID(), tenantId: ctx.tenantId, operation, outcome: 'failure', sanitized: { reason: 'authorization_denied', error: url.searchParams.get('error') } });
-      html(res, 403, page('Buffer authorization denied', `<div class="warn"><h1>Buffer authorization was not completed</h1><p>${oauth.reconnect ? 'Your existing Buffer connection, Gabel data, and evidence were kept unchanged.' : 'No Buffer connection was stored.'}</p><a class="button secondary" href="${oauth.reconnect ? '/account' : '/'}">Return to Gabel</a></div>`)); return;
+      await store.addEvidence({ id: randomUUID(), tenantId: ctx.tenantId, operation, outcome: 'failure', sanitized: { reason: 'authorization_denied', error: url.searchParams.get('error') } });
+      html(res, 403, page('Buffer authorization denied', `<div class="warn"><h1>Buffer authorization was not completed</h1><p>${oauth.reconnect ? 'Your existing Buffer connection, Gabel data, and evidence were kept unchanged.' : 'No Buffer connection was stored.'}</p><a class="button secondary" href="${oauth.reconnect ? '/account' : '/workspace'}">Return to Gabel</a></div>`)); return;
     }
     const code = url.searchParams.get('code');
     if (!code) {
-      store.addEvidence({ id: randomUUID(), tenantId: ctx.tenantId, operation, outcome: 'failure', sanitized: { reason: 'authorization_interrupted' } });
+      await store.addEvidence({ id: randomUUID(), tenantId: ctx.tenantId, operation, outcome: 'failure', sanitized: { reason: 'authorization_interrupted' } });
       html(res, 400, page('Buffer authorization interrupted', `<div class="error"><h1>Buffer did not return an authorization code</h1><p>${oauth.reconnect ? 'Your existing credentials and evidence were kept unchanged. Start Reconnect Buffer again when ready.' : 'No Buffer connection was stored.'}</p></div>`));
       return;
     }
     try {
       const tokens = await exchangeAuthorizationCode(config, code, oauth.verifier);
       const accountResult = await buffer.rawGraphql<{ account: { id: string } }>(tokens.access_token, 'query GabelAccountIdentity { account { id } }');
-      const saved = saveAuthorizedBufferConnection({ store, config, tenantId: ctx.tenantId, oauth, tokens, accountId: accountResult.data.account.id });
-      store.addEvidence({ id: randomUUID(), tenantId: ctx.tenantId, operation, outcome: 'success', requestId: accountResult.requestId,
+      const saved = await saveAuthorizedBufferConnection({ store, config, tenantId: ctx.tenantId, oauth, tokens, accountId: accountResult.data.account.id });
+      await store.addEvidence({ id: randomUUID(), tenantId: ctx.tenantId, operation, outcome: 'success', requestId: accountResult.requestId,
         sanitized: { connectionId: saved.connectionId, accountIdHash: sha256(accountResult.data.account.id), scopes: tokens.scope.split(' '), reauthorized: saved.reauthorized } });
     } catch (error) {
-      store.addEvidence({ id: randomUUID(), tenantId: ctx.tenantId, operation, outcome: 'failure',
+      await store.addEvidence({ id: randomUUID(), tenantId: ctx.tenantId, operation, outcome: 'failure',
         requestId: error instanceof BufferError ? error.requestId : undefined,
         sanitized: bufferAuthorizationFailureEvidence(error) });
       if (error instanceof BufferAuthorizationError) {
@@ -375,7 +418,7 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
       }
       throw error;
     }
-    redirect(res, '/'); return;
+    redirect(res, '/workspace'); return;
   }
   if (req.method === 'GET' && url.pathname === '/privacy') {
     html(res, 200, page('Privacy notice', privacyNotice(config)));
@@ -386,7 +429,7 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
     return;
   }
   if (req.method === 'GET' && url.pathname === '/account') {
-    const connection = store.getConnection(ctx.tenantId);
+    const connection = await store.getConnection(ctx.tenantId);
     html(res, 200, page('Account and data', `<h1>Account and data controls</h1>
       <section><h2>Buffer connection</h2>${connection ? `${connection.status === 'reauthorization_required' ? `<div class="notice warn"><strong>Buffer authorization needs attention</strong><p>Reconnect the same Buffer account to restore access. Gabel keeps your cached records and evidence, and will reject a different Buffer account.</p><form method="post" action="/auth/buffer/reconnect"><input type="hidden" name="_csrf" value="${esc(ctx.csrf)}"><input type="hidden" name="connection_id" value="${esc(connection.id)}"><button>Reconnect Buffer</button></form></div>` : '<div class="notice ok"><strong>Buffer is connected</strong><p>No reauthorization is currently required.</p></div>'}<p>Disconnecting deletes Gabel's encrypted Buffer credentials and cached Buffer records. Buffer does not document a programmatic OAuth revocation endpoint; to invalidate the grant at Buffer too, revoke Gabel in Buffer account settings.</p><form class="stack" method="post" action="/account/disconnect"><input type="hidden" name="_csrf" value="${esc(ctx.csrf)}"><label for="disconnect-confirmation">Type <code>DISCONNECT BUFFER</code></label><input id="disconnect-confirmation" name="confirmation" autocomplete="off" required><button>Disconnect and delete local Buffer data</button></form>` : '<p>No Buffer connection is stored for this browser account.</p>'}</section>
       <section class="card danger"><h2>Delete Gabel account data</h2><p>This permanently deletes this browser account, its sessions, cached Buffer records, encrypted credentials, edit intents, and evidence records from Gabel. This does not delete your Buffer account or social-platform content.</p><form class="stack" method="post" action="/account/delete"><input type="hidden" name="_csrf" value="${esc(ctx.csrf)}"><label for="delete-confirmation">Type <code>DELETE GABEL DATA</code></label><input id="delete-confirmation" name="confirmation" autocomplete="off" required><button>Delete Gabel data</button></form></section>`));
@@ -395,33 +438,33 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
   if (req.method === 'POST' && url.pathname === '/account/disconnect') {
     const body = await form(req, ctx);
     if (body.get('confirmation') !== 'DISCONNECT BUFFER') throw new PublicError('Confirmation must exactly match DISCONNECT BUFFER');
-    const connection = store.getConnection(ctx.tenantId);
-    if (!connection || !store.disconnectConnection(ctx.tenantId, connection.id)) throw new PublicError('No Buffer connection was found');
-    store.addEvidence({ id: randomUUID(), tenantId: ctx.tenantId, operation: 'buffer_disconnect', outcome: 'success', sanitized: { localCredentialsDeleted: true, remoteRevocation: 'user_action_required_in_buffer' } });
+    const connection = await store.getConnection(ctx.tenantId);
+    if (!connection || !await store.disconnectConnection(ctx.tenantId, connection.id)) throw new PublicError('No Buffer connection was found');
+    await store.addEvidence({ id: randomUUID(), tenantId: ctx.tenantId, operation: 'buffer_disconnect', outcome: 'success', sanitized: { localCredentialsDeleted: true, remoteRevocation: 'user_action_required_in_buffer' } });
     html(res, 200, page('Buffer disconnected', '<div class="card ok" role="status"><h1>Local Buffer connection deleted</h1><p>Gabel deleted its credentials and cached Buffer data. Revoke Gabel in Buffer settings if you also want Buffer to invalidate the grant.</p></div>'));
     return;
   }
   if (req.method === 'POST' && url.pathname === '/account/delete') {
     const body = await form(req, ctx);
     if (body.get('confirmation') !== 'DELETE GABEL DATA') throw new PublicError('Confirmation must exactly match DELETE GABEL DATA');
-    if (!store.deleteTenant(ctx.tenantId)) throw new PublicError('Account data was not found');
+    if (!await store.deleteTenant(ctx.tenantId)) throw new PublicError('Account data was not found');
     res.setHeader('set-cookie', [expireCookie('gabel_session', true), expireCookie('gabel_csrf', false)]);
     html(res, 200, page('Data deleted', '<div class="card ok" role="status"><h1>Gabel data deleted</h1><p>The local account and associated records were deleted. This did not delete the Buffer account or content held by Buffer or social platforms.</p></div>'));
     return;
   }
   if (req.method === 'POST' && url.pathname === '/sync') {
     await form(req, ctx);
-    const connection = store.getConnection(ctx.tenantId);
+    const connection = await store.getConnection(ctx.tenantId);
     if (!connection) throw new PublicError('Authorize Buffer before discovery', 401, 'buffer_not_connected');
     await buffer.discover(ctx.tenantId, connection.id);
-    redirect(res, '/'); return;
+    redirect(res, '/workspace'); return;
   }
   if (req.method === 'POST' && url.pathname === '/media/check') {
     const body = await form(req, ctx);
-    const connection = store.getConnection(ctx.tenantId);
+    const connection = await store.getConnection(ctx.tenantId);
     const postId = body.get('post_id') ?? '';
     if (!connection) throw new PublicError('Authorize Buffer before checking media', 401, 'buffer_not_connected');
-    if (!store.hasCachedPost(ctx.tenantId, connection.id, postId)) throw new PublicError('Post was not retrieved for this Buffer connection');
+    if (!await store.hasCachedPost(ctx.tenantId, connection.id, postId)) throw new PublicError('Post was not retrieved for this Buffer connection');
     const { post, requestId } = await buffer.getPost(ctx.tenantId, connection.id, postId);
     const results = await Promise.all(post.assets.slice(0, 10).map(async (asset, position) => ({
       position, type: asset.type, result: await probeMediaUrl(asset.source),
@@ -433,18 +476,18 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
     const state = aggregateMediaState(summary.map((item) => item.label));
     const counts = Object.fromEntries(['reachable', 'unreachable', 'unsafe', 'error'].map((outcome) =>
       [outcome, results.filter((item) => item.result.outcome === outcome).length]));
-    store.saveMediaCheck({ tenantId: ctx.tenantId, connectionId: connection.id, postId, status: state,
+    await store.saveMediaCheck({ tenantId: ctx.tenantId, connectionId: connection.id, postId, status: state,
       checkedCount: results.length, summary, requestId });
-    store.addEvidence({ id: randomUUID(), tenantId: ctx.tenantId, operation: 'media_availability_check', outcome: 'success', requestId,
+    await store.addEvidence({ id: randomUUID(), tenantId: ctx.tenantId, operation: 'media_availability_check', outcome: 'success', requestId,
       sanitized: { postIdHash: sha256(post.id), result: state, checkedCount: results.length, omittedCount: Math.max(0, post.assets.length - results.length), counts } });
     redirect(res, `/posts/${encodeURIComponent(postId)}#media`); return;
   }
   if (req.method === 'POST' && url.pathname === '/edits/prepare') {
     const body = await form(req, ctx);
-    const connection = store.getConnection(ctx.tenantId);
+    const connection = await store.getConnection(ctx.tenantId);
     if (!connection) throw new PublicError('Authorize Buffer before preparing an edit', 401, 'buffer_not_connected');
     const postId = body.get('post_id') ?? '';
-    const problemPositions = store.getFreshConfirmedProblemPositions(ctx.tenantId, connection.id, postId);
+    const problemPositions = await store.getFreshConfirmedProblemPositions(ctx.tenantId, connection.id, postId);
     const replacementPosition = Number(body.get('replacement_position') ?? '0');
     if (!problemPositions.includes(replacementPosition)) {
       throw new PublicError('Run a fresh media check and confirm a problem before preparing a repair');
@@ -456,17 +499,17 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
   }
   const editMatch = url.pathname.match(/^\/edits\/([0-9a-f-]+)$/);
   if (req.method === 'GET' && editMatch) {
-    const intent = store.db.prepare(`SELECT post_id,before_json,intended_assets_json,outcome_json,expires_at,status FROM edit_intents WHERE id=? AND tenant_id=?`).get(editMatch[1], ctx.tenantId) as Record<string, string> | undefined;
+    const intent = await store.getEditIntent(ctx.tenantId, editMatch[1]);
     if (!intent) { html(res, 404, page('Not found', '<h1>Edit intent not found</h1>')); return; }
     if (intent.status !== 'pending' || Date.parse(intent.expires_at) <= Date.now()) {
-      html(res, 409, page('Repair unavailable', '<div class="notice warn"><h1>This approval is no longer active.</h1><p>Return to the scheduled post and run a fresh check before preparing another repair.</p></div><a class="button" href="/">Return to posts</a>')); return;
+      html(res, 409, page('Repair unavailable', '<div class="notice warn"><h1>This approval is no longer active.</h1><p>Return to the scheduled post and run a fresh check before preparing another repair.</p></div><a class="button" href="/workspace">Return to posts</a>')); return;
     }
     html(res, 200, page('Review repair', renderIntentPreview({ ...intent, id: editMatch[1], csrf: ctx.csrf }))); return;
   }
   const resultMatch = url.pathname.match(/^\/edits\/([0-9a-f-]+)\/result$/);
   if (req.method === 'GET' && resultMatch) {
-    const intent = store.db.prepare(`SELECT outcome_json,status FROM edit_intents WHERE id=? AND tenant_id=?`).get(resultMatch[1], ctx.tenantId) as Record<string, string> | undefined;
-    if (!intent) { html(res, 404, page('Not found', '<h1>Repair result not found</h1><p>Expired repair records are deleted automatically.</p><a class="button" href="/">Return to posts</a>')); return; }
+    const intent = await store.getEditIntent(ctx.tenantId, resultMatch[1]);
+    if (!intent) { html(res, 404, page('Not found', '<h1>Repair result not found</h1><p>Expired repair records are deleted automatically.</p><a class="button" href="/workspace">Return to posts</a>')); return; }
     if (intent.status === 'pending') { redirect(res, `/edits/${resultMatch[1]}`); return; }
     const result = renderRepairResult(intent);
     html(res, result.status, page('Repair result', result.body)); return;
@@ -478,13 +521,13 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
     redirect(res, `/edits/${confirmMatch[1]}/result`); return;
   }
   if (req.method === 'GET' && url.pathname === '/evidence') {
-    const events = store.db.prepare('SELECT operation,outcome,request_id,sanitized_json,created_at FROM evidence_events WHERE tenant_id=? ORDER BY created_at DESC').all(ctx.tenantId) as Array<Record<string, unknown>>;
+    const events = await store.listEvidence(ctx.tenantId);
     html(res, 200, page('Evidence', `<h1>Sanitized live evidence</h1>${events.length ? events.map((e) => `<div class="card"><strong>${esc(e.operation)}: ${esc(e.outcome)}</strong><br><small>${esc(e.created_at)} · request ID ${esc(e.request_id ?? 'not provided')}</small><pre>${esc(JSON.stringify(JSON.parse(String(e.sanitized_json)), null, 2))}</pre></div>`).join('') : '<p>No live operations have been completed. This is not evidence of a successful integration.</p>'}`)); return;
   }
   html(res, 404, page('Not found', '<h1>Not found</h1>'));
 }
 
-const server = createHttpsServer({ key: readFileSync(config.tlsKeyPath), cert: readFileSync(config.tlsCertPath) }, (req, res) => {
+export default function requestHandler(req: IncomingMessage, res: ServerResponse): void {
   const requestId = randomUUID();
   res.setHeader('x-request-id', requestId);
   handler(req, res).catch((error: unknown) => {
@@ -499,15 +542,19 @@ const server = createHttpsServer({ key: readFileSync(config.tlsKeyPath), cert: r
       ? `${error.message}${error.requestId ? ` (request ${error.requestId})` : ''}${error.retryAfter ? `; retry after ${error.retryAfter}s` : ''}`
       : error instanceof PublicError || error instanceof ReplacementValidationError ? error.message
       : `An unexpected server error occurred. Reference ${requestId}.`;
-    html(res, status, page('Operation stopped', `<div class="error"><h1>Operation stopped safely</h1><p>${esc(message)}</p><p>No success has been recorded for this operation.</p></div><p><a href="/">Return</a></p>`));
+    html(res, status, page('Operation stopped', `<div class="error"><h1>Operation stopped safely</h1><p>${esc(message)}</p><p>No success has been recorded for this operation.</p></div><p><a href="/workspace">Return</a></p>`));
   });
-});
+}
 
-server.on('clientError', (_error, socket) => {
+const server = !isVercel
+  ? createHttpsServer({ key: readFileSync(config.tlsKeyPath!), cert: readFileSync(config.tlsCertPath!) }, requestHandler)
+  : undefined;
+
+server?.on('clientError', (_error, socket) => {
   if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
 });
 
-server.on('error', (error: NodeJS.ErrnoException) => {
+server?.on('error', (error: NodeJS.ErrnoException) => {
   console.error(JSON.stringify({ event: 'server_error', code: error.code ?? 'unknown' }));
 });
 
@@ -515,21 +562,23 @@ let shuttingDown = false;
 function shutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
-  clearInterval(retentionTimer);
+  if (retentionTimer) clearInterval(retentionTimer);
   console.log(JSON.stringify({ event: 'shutdown_started', signal }));
   const forceTimer = setTimeout(() => {
     console.error(JSON.stringify({ event: 'shutdown_timeout' }));
     process.exit(1);
   }, 10_000);
   forceTimer.unref();
-  server.close(() => {
+  server?.close(() => {
     clearTimeout(forceTimer);
-    store.close();
+    void store.close();
     console.log(JSON.stringify({ event: 'shutdown_complete' }));
   });
 }
 
-process.once('SIGTERM', () => shutdown('SIGTERM'));
-process.once('SIGINT', () => shutdown('SIGINT'));
+if (!isVercel) {
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+  process.once('SIGINT', () => shutdown('SIGINT'));
+}
 
-server.listen(config.port, () => console.log(JSON.stringify({ event: 'server_started', origin: config.appOrigin, port: config.port })));
+server?.listen(config.port, () => console.log(JSON.stringify({ event: 'server_started', origin: config.appOrigin, port: config.port })));

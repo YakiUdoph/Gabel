@@ -9,6 +9,7 @@ export type Config = {
   encryptionKey: Buffer;
   cookieSecret: Buffer;
   databasePath: string;
+  databaseUrl?: string;
   tlsKeyPath?: string;
   tlsCertPath?: string;
   tlsOriginHostname: string;
@@ -76,7 +77,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const cookieSecret = key('APP_COOKIE_SECRET', env);
   if (encryptionKey.equals(cookieSecret)) throw new Error('APP_ENCRYPTION_KEY and APP_COOKIE_SECRET must be different');
   const databasePath = resolve(env.DATABASE_PATH ?? './data/gabel.db');
-  if (production && (env.DATABASE_PATH === ':memory:' || databasePath === resolve(':memory:'))) {
+  const databaseUrl = env.DATABASE_URL?.trim() || undefined;
+  if (databaseUrl) {
+    let parsed: URL;
+    try { parsed = new URL(databaseUrl); } catch { throw new Error('DATABASE_URL must be a valid PostgreSQL URL'); }
+    if (!['postgres:', 'postgresql:'].includes(parsed.protocol) || !parsed.hostname) throw new Error('DATABASE_URL must be a valid PostgreSQL URL');
+  }
+  if (env.VERCEL && !databaseUrl) throw new Error('DATABASE_URL is required for durable Vercel persistence');
+  if (production && !databaseUrl && (env.DATABASE_PATH === ':memory:' || databasePath === resolve(':memory:'))) {
     throw new Error('DATABASE_PATH must be persistent in production');
   }
   const operatorName = required('OPERATOR_NAME', env);
@@ -96,6 +104,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     encryptionKey,
     cookieSecret,
     databasePath,
+    databaseUrl,
     tlsKeyPath: env.TLS_KEY_PATH ? resolve(env.TLS_KEY_PATH) : undefined,
     tlsCertPath: env.TLS_CERT_PATH ? resolve(env.TLS_CERT_PATH) : undefined,
     tlsOriginHostname: (() => {

@@ -51,3 +51,7 @@ To change the recommendation to GO, complete the live checklist in order and ret
 4. Prepare and review a change on a disposable scheduled post.
 5. Explicitly confirm it, then verify the retrieved asset list, `dueAt`, `shareMode`, `schedulingType`, text, and channel.
 6. Record any schema or behavior discrepancy and rerun the relevant tests before review.
+
+## 2026-11-13 current-state addendum
+
+The earlier hosting/configuration blocker is resolved: Gabel is publicly deployed on Vercel with durable Neon PostgreSQL and the exact production callback. Automated and public acceptance evidence covers the platform, database, session, OAuth-state, and route boundaries. Fresh interactive Buffer OAuth remains a required account-owner action; no new live mutation is authorized, and no phase is advanced automatically.

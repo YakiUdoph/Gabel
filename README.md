@@ -1,16 +1,16 @@
-# Gabel
+# How to test
 
 Gabel finds externally hosted media that may have become unavailable after a Buffer API post was scheduled. It lets the user check the media, review a replacement, and approve an asset-only edit without intentionally changing the post's text, channel, or scheduled time.
 
-Gabel is a proof-stage Buffer Commit 2026 project. It uses genuine Buffer data and has no seeded demo account or fake posts. **Not deployed yet.** One controlled disposable-post repair was verified live on November 8, 2026, then the post was deleted and the controlled media fixture was restored. There is no public judge sandbox or reusable hosted test account.
+Gabel is a proof-stage Buffer Commit 2026 project. It uses genuine Buffer data and has no seeded demo account or fake posts. The public application is [https://gabel-six.vercel.app](https://gabel-six.vercel.app), backed by Vercel Functions and durable Neon PostgreSQL. One controlled disposable-post repair was verified live on November 8, 2026, then the post was deleted and the controlled media fixture was restored. There is no seeded judge account or reusable disposable post.
 
-## How to Test Gabel
+## Start here
 
 You can inspect media without changing a Buffer post. Preparing a replacement also sends no mutation. A live edit happens only after a second step in which the user types an exact confirmation phrase.
 
 ### Route A: Judge / hosted application
 
-**Current status: Not deployed yet.** There is no public URL, judge sandbox, demo account, or disposable test post. Until those exist, the hosted route cannot be reproduced safely.
+**Current status: public application available.** Open [https://gabel-six.vercel.app](https://gabel-six.vercel.app). The landing page and empty workspace are publicly verifiable. Genuine Buffer data requires the evaluator to authorize an account they control. No demo credentials or disposable test post are provided.
 
 When a hosted application is available, the route will require:
 
@@ -21,7 +21,7 @@ When a hosted application is available, the route will require:
 
 Do not test repair on an important post. The read-only media check is the safe first test:
 
-1. Open the hosted Gabel URL. It is **not available yet**.
+1. Open [https://gabel-six.vercel.app](https://gabel-six.vercel.app).
 2. Select **Connect Buffer** and approve `account:read`, `posts:read`, `posts:write`, and `offline_access`. Gabel needs write access for the optional repair step; checking media does not edit the post.
 3. Select **Refresh from Buffer**.
 4. Find a scheduled post with media and select **Check media accessibility**. Gabel fetches the post again and checks up to ten assets without displaying their URLs.
@@ -80,7 +80,7 @@ Start the HTTPS application:
 npm.cmd start
 ```
 
-Open `https://localhost:3443/`, or the exact `APP_ORIGIN` you configured. Your browser must trust the local certificate before the Buffer callback can complete normally.
+Open `https://localhost:3443/`, or the exact `APP_ORIGIN` you configured. The public product page is `/`; select **Open workspace** or go directly to `/workspace` for the Buffer workflow. Your browser must trust the local certificate before the Buffer callback can complete normally.
 
 For development with automatic restart:
 
@@ -94,6 +94,7 @@ Run the available checks:
 npm.cmd run typecheck
 npm.cmd test
 npm.cmd run integration
+npm.cmd run integration:postgres
 npm.cmd run browser
 ```
 
@@ -109,7 +110,8 @@ For an approved production deployment, follow [docs/PRODUCTION-DEPLOYMENT.md](do
 | Verified with the live Buffer API | Account, organization, channel, scheduled post, image asset, update capability, schema/media-format reads, and sanitized read-only media evidence. |
 | Verified by automated tests | OAuth and token handling, tenant isolation, media safety, replacement rules, asset ordering and preservation, exact approval, stale-state rejection, ambiguity handling, deletion, retention, and structural accessibility checks. Mocked Buffer tests are not live evidence. |
 | Verified with a controlled live mutation | One receipt-bound disposable X image post completed DETECT → REPAIR → VERIFY on November 8, 2026: HTTP 410 detection, validated replacement, exact approval, one assets-only `editPost`, and a fresh zero-discrepancy preservation comparison. Cleanup and fixture restoration were separately authorized and verified. |
-| Blocked | Public judge reproduction and production release. There is no deployment, current disposable-post setup, or judge account, and the compliance gate remains failed. |
+| Verified in production | Public landing/workspace routing, readiness, security headers, managed PostgreSQL persistence across instances, OAuth initiation with PKCE, and exact callback configuration. |
+| Blocked | Fresh interactive production Buffer authorization and a currently authorized disposable repair demonstration. No judge credentials or disposable post are provided. |
 | Planned, not implemented | Background monitoring, automatic repair, bulk editing, and support for replacement workflows beyond the current X JPEG/PNG image path. |
 
 ## How Gabel protects a repair

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { Store } from './db.ts';
+import type { AppStore } from './persistence.ts';
 import type { AssetInput, BufferAsset, BufferPost } from './types.ts';
 import { BufferClient, BufferError, POST_FIELDS } from './buffer.ts';
 import { evidencePost, sanitize } from './security.ts';
@@ -100,12 +100,12 @@ export function comparePost(before: BufferPost, after: BufferPost | null | undef
 }
 
 export class EditService {
-  readonly store: Store;
+  readonly store: AppStore;
   readonly buffer: BufferClient;
   readonly probe: typeof probeMediaUrl;
   readonly now: () => number;
 
-  constructor(store: Store, buffer: BufferClient, options: { probe?: typeof probeMediaUrl; now?: () => number } = {}) {
+  constructor(store: AppStore, buffer: BufferClient, options: { probe?: typeof probeMediaUrl; now?: () => number } = {}) {
     this.store = store;
     this.buffer = buffer;
     this.probe = options.probe ?? probeMediaUrl;
@@ -119,31 +119,28 @@ export class EditService {
     const now = this.now();
     const validations = await validateImageReplacements({ store: this.store, buffer: this.buffer, tenantId, connectionId,
       post, replacements, probe: this.probe, now });
-    const problemEvidence = this.store.getFreshConfirmedProblemEvidence(tenantId, connectionId, postId, new Date(now));
+    const problemEvidence = await this.store.getFreshConfirmedProblemEvidence(tenantId, connectionId, postId, new Date(now));
     const id = randomUUID();
-    this.store.db.prepare(`INSERT INTO edit_intents(id,tenant_id,connection_id,post_id,before_json,intended_assets_json,before_fingerprint,status,created_at,expires_at)
-      VALUES(?,?,?,?,?,?,?,'pending',?,?)`).run(id, tenantId, connectionId, postId, JSON.stringify(post), JSON.stringify(assets),
-        fingerprintPost(post), new Date(now).toISOString(), new Date(now + 10 * 60_000).toISOString());
-    this.store.db.prepare('UPDATE edit_intents SET outcome_json=? WHERE id=?').run(JSON.stringify({ replacementValidations: validations, problemEvidence }), id);
+    await this.store.createEditIntent({ id, tenantId, connectionId, postId, beforeJson: JSON.stringify(post), intendedAssetsJson: JSON.stringify(assets),
+      beforeFingerprint: fingerprintPost(post), createdAt: new Date(now).toISOString(), expiresAt: new Date(now + 10 * 60_000).toISOString(),
+      outcomeJson: JSON.stringify({ replacementValidations: validations, problemEvidence }) });
     return id;
   }
 
   async confirm(tenantId: string, intentId: string, confirmation: string): Promise<Comparison> {
-    const preview = this.store.db.prepare(`SELECT post_id FROM edit_intents WHERE id=? AND tenant_id=? AND status='pending' AND expires_at>?`)
-      .get(intentId, tenantId, new Date().toISOString()) as Record<string, string> | undefined;
+    const preview = await this.store.getPendingEditIntent(tenantId, intentId);
     if (!preview) throw new PublicError('Edit intent is missing, expired, already used, or belongs to another tenant');
     if (confirmation !== `EDIT POST ${preview.post_id}`) throw new PublicError(`Confirmation must exactly match EDIT POST ${preview.post_id}`);
     const claimId = randomUUID();
-    const intent = this.store.claimEditIntent(tenantId, intentId, preview.post_id, claimId);
+    const intent = await this.store.claimEditIntent(tenantId, intentId, preview.post_id, claimId);
     if (!intent) throw new PublicError('Edit intent is already claimed, expired, used, or belongs to another tenant; no mutation was sent');
     let latest: { post: BufferPost };
     let intendedAssets: AssetInput[];
     try {
       latest = await this.buffer.getPost(tenantId, intent.connection_id, intent.post_id);
       if (fingerprintPost(latest.post) !== intent.before_fingerprint) {
-        this.store.db.prepare(`UPDATE edit_intents SET status='aborted_stale', outcome_json=? WHERE id=? AND status='pending'`)
-          .run(JSON.stringify({ reason: 'Post changed after preparation' }), intentId);
-        this.store.addEvidence({ id: randomUUID(), tenantId, operation: 'edit_post', outcome: 'failure', sanitized: { reason: 'post_changed_before_mutation', postFingerprint: fingerprintPost(latest.post) } });
+        await this.store.updateEditIntent(intentId, 'aborted_stale', { reason: 'Post changed after preparation' }, true);
+        await this.store.addEvidence({ id: randomUUID(), tenantId, operation: 'edit_post', outcome: 'failure', sanitized: { reason: 'post_changed_before_mutation', postFingerprint: fingerprintPost(latest.post) } });
         throw new PublicError('Post changed after preparation; no mutation was sent');
       }
       intendedAssets = JSON.parse(intent.intended_assets_json) as AssetInput[];
@@ -158,15 +155,13 @@ export class EditService {
         connectionId: intent.connection_id, post: latest.post, replacements, probe: this.probe, now: this.now() });
       assertFreshMatchingValidation(previousValidations, currentValidations, this.now());
     } catch (error) {
-      this.store.db.prepare(`UPDATE edit_intents SET status=CASE WHEN status='pending' THEN 'aborted_stale' ELSE status END,
-        outcome_json=? WHERE id=?`).run(JSON.stringify({ reason: error instanceof Error ? error.message : 'Pre-mutation validation failed' }), intentId);
-      this.store.finishEditClaim(intentId, claimId, 'failed');
+      await this.store.updateEditIntent(intentId, 'aborted_stale', { reason: error instanceof Error ? error.message : 'Pre-mutation validation failed' }, true);
+      await this.store.finishEditClaim(intentId, claimId, 'failed');
       throw error;
     }
-    if (!this.store.startEditMutation(intentId, claimId)) {
-      this.store.db.prepare(`UPDATE edit_intents SET status='aborted_stale',outcome_json=? WHERE id=? AND status='pending'`)
-        .run(JSON.stringify({ reason: 'The durable approval claim expired before mutation; no mutation was sent' }), intentId);
-      this.store.finishEditClaim(intentId, claimId, 'failed');
+    if (!await this.store.startEditMutation(intentId, claimId)) {
+      await this.store.updateEditIntent(intentId, 'aborted_stale', { reason: 'The durable approval claim expired before mutation; no mutation was sent' }, true);
+      await this.store.finishEditClaim(intentId, claimId, 'failed');
       throw new PublicError('The approval claim expired before mutation; no mutation was sent. Prepare a new repair intent.');
     }
     let mutationData: { editPost: { post?: BufferPost; message?: string } };
@@ -184,17 +179,15 @@ export class EditService {
     } catch (error) {
       const classification = classifyMutationException(error);
       const ambiguous = classification === 'ambiguous';
-      this.store.db.prepare(`UPDATE edit_intents SET status=?, outcome_json=? WHERE id=?`)
-        .run(ambiguous ? 'ambiguous' : 'failed', JSON.stringify(sanitize(error)), intentId);
-      this.store.finishEditClaim(intentId, claimId, ambiguous ? 'ambiguous' : 'failed');
-      this.store.addEvidence({ id: randomUUID(), tenantId, operation: 'edit_post', outcome: ambiguous ? 'ambiguous' : 'failure', sanitized: sanitize(error) });
+      await this.store.updateEditIntent(intentId, ambiguous ? 'ambiguous' : 'failed', sanitize(error));
+      await this.store.finishEditClaim(intentId, claimId, ambiguous ? 'ambiguous' : 'failed');
+      await this.store.addEvidence({ id: randomUUID(), tenantId, operation: 'edit_post', outcome: ambiguous ? 'ambiguous' : 'failure', sanitized: sanitize(error) });
       throw error;
     }
     if (!mutationData.editPost.post) {
-      this.store.db.prepare(`UPDATE edit_intents SET status='failed', outcome_json=? WHERE id=?`)
-        .run(JSON.stringify(sanitize(mutationData)), intentId);
-      this.store.finishEditClaim(intentId, claimId, 'failed');
-      this.store.addEvidence({ id: randomUUID(), tenantId, operation: 'edit_post', outcome: 'failure', requestId,
+      await this.store.updateEditIntent(intentId, 'failed', sanitize(mutationData));
+      await this.store.finishEditClaim(intentId, claimId, 'failed');
+      await this.store.addEvidence({ id: randomUUID(), tenantId, operation: 'edit_post', outcome: 'failure', requestId,
         sanitized: { typedMutationError: mutationData.editPost.message ?? 'unknown' } });
       throw new PublicError('Buffer rejected the edit; no success was recorded');
     }
@@ -202,10 +195,9 @@ export class EditService {
     try {
       after = (await this.buffer.getPost(tenantId, intent.connection_id, intent.post_id)).post;
     } catch (error) {
-      this.store.db.prepare(`UPDATE edit_intents SET status='ambiguous', outcome_json=? WHERE id=?`)
-        .run(JSON.stringify({ mutationResponse: sanitize(mutationData), refetchError: sanitize(error) }), intentId);
-      this.store.finishEditClaim(intentId, claimId, 'ambiguous');
-      this.store.addEvidence({ id: randomUUID(), tenantId, operation: 'edit_post', outcome: 'ambiguous', requestId,
+      await this.store.updateEditIntent(intentId, 'ambiguous', { mutationResponse: sanitize(mutationData), refetchError: sanitize(error) });
+      await this.store.finishEditClaim(intentId, claimId, 'ambiguous');
+      await this.store.addEvidence({ id: randomUUID(), tenantId, operation: 'edit_post', outcome: 'ambiguous', requestId,
         sanitized: { reason: 'mutation_succeeded_but_verification_retrieval_failed' } });
       throw new BufferError('Edit returned success but verification retrieval failed; outcome is ambiguous', 'network', sanitize(error), requestId);
     }
@@ -213,9 +205,9 @@ export class EditService {
     const comparison = comparePost(before, after, intendedAssets);
     const status = comparison.matches ? 'confirmed' : 'ambiguous';
     const outcome = { before: evidencePost(before), after: after ? evidencePost(after) : { missing: true }, comparison };
-    this.store.db.prepare(`UPDATE edit_intents SET status=?, outcome_json=? WHERE id=?`).run(status, JSON.stringify(outcome), intentId);
-    this.store.finishEditClaim(intentId, claimId, comparison.matches ? 'completed' : 'ambiguous');
-    this.store.addEvidence({ id: randomUUID(), tenantId, operation: 'edit_post', outcome: comparison.matches ? 'success' : 'ambiguous', requestId, sanitized: outcome });
+    await this.store.updateEditIntent(intentId, status, outcome);
+    await this.store.finishEditClaim(intentId, claimId, comparison.matches ? 'completed' : 'ambiguous');
+    await this.store.addEvidence({ id: randomUUID(), tenantId, operation: 'edit_post', outcome: comparison.matches ? 'success' : 'ambiguous', requestId, sanitized: outcome });
     return comparison;
   }
 }

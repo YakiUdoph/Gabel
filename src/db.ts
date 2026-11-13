@@ -411,4 +411,37 @@ export class Store {
     this.db.prepare(`INSERT INTO evidence_events(id,tenant_id,operation,outcome,request_id,sanitized_json,created_at) VALUES(?,?,?,?,?,?,?)`)
       .run(input.id, input.tenantId, input.operation, input.outcome, input.requestId ?? null, JSON.stringify(input.sanitized), new Date().toISOString());
   }
+
+  getPostOrganizationId(tenantId: string, connectionId: string, postId: string, channelId?: string): string | undefined {
+    const row = this.db.prepare(`SELECT organization_id FROM posts WHERE tenant_id=? AND connection_id=? AND id=?${channelId ? ' AND channel_id=?' : ''}`)
+      .get(...(channelId ? [tenantId, connectionId, postId, channelId] : [tenantId, connectionId, postId])) as { organization_id: string } | undefined;
+    return row?.organization_id;
+  }
+
+  createEditIntent(input: { id: string; tenantId: string; connectionId: string; postId: string; beforeJson: string;
+    intendedAssetsJson: string; beforeFingerprint: string; createdAt: string; expiresAt: string; outcomeJson: string }): void {
+    this.db.prepare(`INSERT INTO edit_intents(id,tenant_id,connection_id,post_id,before_json,intended_assets_json,before_fingerprint,status,created_at,expires_at,outcome_json)
+      VALUES(?,?,?,?,?,?,?,'pending',?,?,?)`).run(input.id, input.tenantId, input.connectionId, input.postId,
+        input.beforeJson, input.intendedAssetsJson, input.beforeFingerprint, input.createdAt, input.expiresAt, input.outcomeJson);
+  }
+
+  getPendingEditIntent(tenantId: string, intentId: string, now = new Date()): Record<string, string> | undefined {
+    return this.db.prepare(`SELECT * FROM edit_intents WHERE id=? AND tenant_id=? AND status='pending' AND expires_at>?`)
+      .get(intentId, tenantId, now.toISOString()) as Record<string, string> | undefined;
+  }
+
+  getEditIntent(tenantId: string, intentId: string): Record<string, string> | undefined {
+    return this.db.prepare('SELECT * FROM edit_intents WHERE id=? AND tenant_id=?').get(intentId, tenantId) as Record<string, string> | undefined;
+  }
+
+  updateEditIntent(intentId: string, status: 'pending' | 'aborted_stale' | 'ambiguous' | 'confirmed' | 'failed', outcome: unknown,
+    onlyPending = false): boolean {
+    const sql = `UPDATE edit_intents SET status=?,outcome_json=? WHERE id=?${onlyPending ? " AND status='pending'" : ''}`;
+    return this.db.prepare(sql).run(status, JSON.stringify(outcome), intentId).changes === 1;
+  }
+
+  listEvidence(tenantId: string): Array<Record<string, unknown>> {
+    return this.db.prepare(`SELECT operation,outcome,request_id,sanitized_json,created_at FROM evidence_events
+      WHERE tenant_id=? ORDER BY created_at DESC`).all(tenantId) as Array<Record<string, unknown>>;
+  }
 }

@@ -1,6 +1,22 @@
 # Production deployment procedure
 
-Status: implemented deployment procedure; not deployed or production-certified. This procedure preserves Gabel's existing single-process Node.js HTTPS and SQLite architecture.
+Status: Vercel production deployment implemented and publicly reachable at [https://gabel-six.vercel.app](https://gabel-six.vercel.app). Local/Docker HTTPS with SQLite remains the preserved rollback/reference topology documented below.
+
+## Current Vercel production topology
+
+- Existing Vercel project `gabel`; public alias `gabel-six.vercel.app`.
+- Node.js Function entrypoint `api/index.ts`, backed by the shared request handler in `src/server.ts`.
+- Vercel terminates HTTPS; production does not read local certificate files or listen on a port.
+- Managed Neon PostgreSQL resource `gabel-production`, free plan, connected to development, preview, and production environments.
+- Pooled PostgreSQL connections support transactional OAuth state consumption, token-refresh fencing, edit claims, cascaded deletion, and retention. Schema migration uses Neon's HTTP transaction path during lazy cold-start initialization.
+- Vercel Secret variables hold encryption/cookie keys and Buffer/operator values. Public origin, callback, and timeout are Config variables. Values are never committed.
+- `DATABASE_PATH` and local TLS variables remain local/Docker-only. `DATABASE_URL` selects PostgreSQL on Vercel.
+
+Verified public checks on 2026-11-13: `/health/live`, `/health/ready`, `/`, and `/workspace` returned HTTP 200; the premium landing content rendered; required security headers were present; OAuth initiation redirected to Buffer using S256 PKCE and `https://gabel-six.vercel.app/auth/buffer/callback`; no production warning/error/fatal runtime logs were found after these requests.
+
+Interactive Buffer authorization is deliberately not claimed: it requires the account owner to complete Buffer OAuth. No live repair is authorized by deployment. Existing SQLite/Docker evidence data was preserved in place and was not silently copied into the browser-tenant-bound production database.
+
+## Preserved Docker/SQLite rollback procedure
 
 ## Release-gate classification
 
@@ -132,7 +148,7 @@ Gabel handles `SIGTERM`/`SIGINT`, stops accepting work, closes HTTPS, and closes
 
 ## Release decision boundary
 
-This procedure and image are **implemented but not deployed**. Passing the automated preflight is necessary but does not prove infrastructure, legal, accessibility, or judge access. Deployment and production-compliance status require separate operator evidence and approval.
+This preserved Docker/SQLite procedure and image are **implemented but are not the public Vercel deployment**. Passing its preflight does not prove legal, accessibility, or public-production compliance.
 
 ## Verification record — 2026-11-07
 
@@ -174,3 +190,11 @@ Production compliance remains **FAIL** because the operator/infrastructure, manu
 The November 7 verification record above is preserved as dated history. Its live-repair blocker was resolved on November 8 by the controlled receipt-bound repair, fresh preservation comparison, separately authorized deletion, and controlled-media restoration recorded in `TASKS.md` and `PROGRESS.md`. No public deployment or judge sandbox resulted from that run.
 
 The current deployment decision remains **NO-GO / production compliance FAIL** until the operator supplies and verifies the public hostname and exact Buffer callback, TLS and protected secrets, truthful public contacts, one-replica persistent-volume topology, egress/firewall policy, monitoring, incident response, and witnessed backup/restore; qualified legal review and hands-on accessibility testing must also be completed. After explicit deployment approval, follow the build/preflight, backup, single-replica start, health/header, interactive OAuth, and read-only Buffer verification steps above. Stop before any replacement preparation or post mutation.
+
+## Infrastructure diagnosis addendum — 2026-11-13
+
+- **Existing Docker service — live/local evidence:** `gabel-public` remained running and healthy on `127.0.0.1:3444`, using image `gabel:reviewed`, the persistent `gabel-public-data` volume mounted at `/data`, and read-only certificate mounts. It was not stopped, recreated, or modified.
+- **UI image — automated local evidence:** `gabel:ui-preview` has the same entrypoint, command, work directory, non-root user, exposed port, and health check as the healthy image. An isolated run with dummy credentials and a disposable volume reached `server_started` and remained running. The disposable container and volume were then removed. Bundled `server.ts` and all migrations matched `gabel:reviewed`; only `views.ts` differed. The image itself is therefore not reproduced as broken. The exact prior launch command is unavailable, so the historical failure is classified as a launch-time environment, storage, name, or port collision rather than assigned a fabricated single cause.
+- **Vercel — read-only platform evidence:** project `gabel` built the current repository commit as a READY production-target Lambda deployment and assigned `gabel-six.vercel.app`. This does not validate the application: the repository is a long-lived HTTPS server with local TLS and persistent SQLite, while the deployment is serverless and has no verified persistent database topology. No Vercel redeploy or architecture rewrite was attempted.
+- **Release decision:** no public deployment was made. The existing healthy Docker service depends on the operator machine and its recorded origin used a temporary Quick Tunnel hostname, so it is not accepted as a durable judging URL. A compliant host must preserve `/data`, run one replica, terminate or pass through stable HTTPS correctly, keep the callback exact, and remain available through judging without unapproved cost.
+- **Current free-host evaluation:** Render Free is rejected because its filesystem is ephemeral, it spins down after inactivity, and persistent disks require a paid service ([official limits](https://render.com/docs/free)). Fly bills compute and volumes rather than offering the required always-on deployment free ([official pricing](https://fly.io/pricing/)). Railway's Free plan includes only $1 monthly credit despite supporting a small volume, so an always-on service cannot be assumed cost-free ([official plans](https://docs.railway.com/pricing/plans)). An operator-provisioned Oracle Always Free VM with block storage is the closest architecture-preserving candidate, but account creation, capacity, DNS, firewall, TLS proxying, backup, and operator approval are still required ([Oracle documentation](https://docs.oracle.com/cd/E97706_01/pdf/ug/OCI_User_Guide.pdf)). No provider account or billable resource was created.

@@ -875,3 +875,36 @@ Created: 2026-11-02. This is the first task record found in the repository and d
 - [ ] Complete manual keyboard-only, screen-reader, forced-colors, 200%/400% zoom, orientation, and touch review; automated/browser evidence is not an accessibility certification.
 - [ ] Provide approved production hostname/TLS/contact/infrastructure evidence, qualified legal review, and a public judge reproduction path before deployment or submission-readiness claims.
 - [x] Perform no live Buffer mutation, OAuth interaction, Cloudflare change, deployment, secret change, commit, push, or phase advancement. Production compliance remains **FAIL**.
+
+## Final product recovery and submission preparation — 2026-11-13
+
+- [x] Verify the official Buffer Commit deadline, eligibility, judging criteria, and required submission materials against Buffer's competition page and terms.
+- [x] Preserve the healthy `gabel-public` container and `gabel-public-data` volume; inspect state, mounts, health, and sanitized logs without exposing environment values.
+- [x] Reproduce `gabel:ui-preview` in a separate disposable container and volume with dummy credentials; confirm it starts normally and remove only the disposable resources.
+- [x] Compare image configuration and bundled source hashes; confirm server/migrations match and only the UI bundle differs. Classify the earlier failure as runtime launch/configuration or resource collision rather than a broken image; the exact historical command is unavailable, so do not overclaim a single cause.
+- [x] Inspect the existing Vercel project read-only. Confirm the current commit built as a READY Lambda deployment while retaining the documented architectural incompatibility with Gabel's stateful HTTPS/SQLite server.
+- [x] Add a premium public landing page at `/` and retain the genuine Buffer workflow at `/workspace`; use no fake post, metric, testimonial, or outcome data.
+- [x] Add restrained entrance, hover, disclosure, workflow-progress, and button feedback with a complete reduced-motion fallback.
+- [x] Verify the landing, empty/auth, connected dashboard, all media states, post detail, approval, verified, ambiguous, failed, reconnect, desktop, and mobile states in real Chromium.
+- [x] Run post-change typecheck, 80 unit/security tests, and 5 integration tests successfully.
+- [x] Make README begin with `# How to test` and document the public/workspace route split.
+- [x] Prepare the approximately 300-word submission summary, two-minute demo script, official-material checklist, and remaining submission blockers in `JUDGE.md`.
+- [ ] Select and approve a durable public host with persistent storage, stable HTTPS, exact Buffer callback support, one-replica operation, and no unapproved cost.
+- [ ] Run production preflight, backup/restore witness, public health/header checks, interactive OAuth, and genuine read-only retrieval after deployment approval.
+- [ ] Complete the manual accessibility and qualified legal review blockers.
+- [x] Do not stop/recreate the healthy production container, reuse/delete its volume, mutate Buffer, change OAuth settings, deploy, submit, push, or advance a phase automatically.
+
+## Final Vercel production migration â€” 2026-11-13
+
+- [x] Link the existing Vercel `gabel` project and preserve the Docker/SQLite rollback implementation and volume.
+- [x] Provision and connect the Neon `gabel-production` free-plan database without purchasing a paid service.
+- [x] Add a Vercel Node.js Function entrypoint while preserving the shared server-rendered route handler and local HTTPS bootstrap.
+- [x] Implement PostgreSQL schema and persistence for sessions, OAuth state, encrypted credentials, discovery cache, evidence, retention, token-refresh fencing, and single-use edit claims.
+- [x] Transfer required production variables through Vercel Secret/Config storage without printing or committing values; exclude local TLS and SQLite paths.
+- [x] Verify isolated Neon persistence across instances, one-time OAuth state, one-winner edit claims, and tenant cascade deletion.
+- [x] Verify preview and staged-production health, routing, premium landing, authentic empty workspace, and Buffer OAuth initiation before promotion.
+- [x] Promote the tested deployment to `https://gabel-six.vercel.app`; verify public 200 responses, readiness, security headers, exact callback, S256 PKCE, and absence of new warning/error/fatal runtime logs.
+- [x] Preserve existing local SQLite evidence in place rather than silently importing browser-domain-bound sessions or credentials.
+- [ ] Complete interactive production Buffer OAuth and a genuine read-only scheduled-post retrieval. Stop for the account owner.
+- [ ] Create or edit a real disposable Buffer post only under separate explicit authorization.
+- [ ] Complete manual assistive-technology/accessibility review and qualified legal review before a compliance PASS claim.

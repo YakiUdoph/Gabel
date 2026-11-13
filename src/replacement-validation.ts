@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { BufferClient } from './buffer.ts';
-import type { Store } from './db.ts';
+import type { AppStore } from './persistence.ts';
 import { classifyMediaContentType, probeMediaUrl, type MediaProbeResult } from './media-security.ts';
 import type { BufferAsset, BufferPost } from './types.ts';
 
@@ -52,24 +52,21 @@ function rejectProbe(result: MediaProbeResult): never {
 }
 
 async function getChannelConfiguration(
-  store: Store,
+  store: AppStore,
   buffer: BufferClient,
   tenantId: string,
   connectionId: string,
   post: BufferPost,
 ): Promise<ChannelConfiguration> {
-  const context = store.db.prepare(`SELECT organization_id FROM posts
-    WHERE tenant_id=? AND connection_id=? AND id=? AND channel_id=?`).get(
-    tenantId, connectionId, post.id, post.channelId,
-  ) as { organization_id: string } | undefined;
-  if (!context) throw new ReplacementValidationError('Could not verify the destination channel for this post. No edit intent was created.');
+  const organizationId = await store.getPostOrganizationId(tenantId, connectionId, post.id, post.channelId);
+  if (!organizationId) throw new ReplacementValidationError('Could not verify the destination channel for this post. No edit intent was created.');
 
   const result = await buffer.graphql<{ configuration: { channels: ChannelConfiguration[] } }>(tenantId, connectionId, `
     query GabelReplacementChannelConfiguration($organizationId: OrganizationId!) {
       configuration(input: { organizationId: $organizationId }) {
         channels { channelId service channelType }
       }
-    }`, { organizationId: context.organization_id });
+    }`, { organizationId });
   const channel = result.data.configuration.channels.find((item) => item.channelId === post.channelId);
   if (!channel) throw new ReplacementValidationError('Could not verify the destination channel requirements. No edit intent was created.');
   return channel;
@@ -82,7 +79,7 @@ async function getLiveMediaFormats(buffer: BufferClient, tenantId: string, conne
 }
 
 export async function validateImageReplacements(input: {
-  store: Store;
+  store: AppStore;
   buffer: BufferClient;
   tenantId: string;
   connectionId: string;

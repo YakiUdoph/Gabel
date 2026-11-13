@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Config } from './config.ts';
-import type { Store } from './db.ts';
+import type { AppStore } from './persistence.ts';
 import { decrypt, encrypt, sanitize } from './security.ts';
 import type { BufferPost, DbConnection, GraphQlEnvelope, TokenResponse } from './types.ts';
 
@@ -124,10 +124,10 @@ export async function exchangeAuthorizationCode(config: Config, code: string, ve
 
 export class BufferClient {
   readonly config: Config;
-  readonly store: Store;
+  readonly store: AppStore;
   readonly fetcher: FetchLike;
 
-  constructor(config: Config, store: Store, fetcher: FetchLike = fetch) {
+  constructor(config: Config, store: AppStore, fetcher: FetchLike = fetch) {
     this.config = config;
     this.store = store;
     this.fetcher = fetcher;
@@ -137,35 +137,35 @@ export class BufferClient {
     const running = refreshes.get(connection.id);
     if (running) return running;
     const promise = (async () => {
-      const current = this.store.getConnection(connection.tenant_id, connection.id);
+      const current = await this.store.getConnection(connection.tenant_id, connection.id);
       if (!current) throw new BufferError('Connection no longer exists', 'auth');
       if (current.token_version !== connection.token_version || (!force && Date.parse(current.access_expires_at) > Date.now() + 60_000)) {
         return decrypt(current.access_token_ciphertext, this.config.encryptionKey);
       }
       if (!current.refresh_token_ciphertext) {
-        this.store.requireReauthIfVersion(current.id, current.token_version);
+        await this.store.requireReauthIfVersion(current.id, current.token_version);
         throw new BufferError('No refresh token is available; reauthorization is required', 'auth');
       }
       const ownerId = randomUUID();
       const claimTime = new Date();
-      const claim = this.store.acquireTokenRefreshClaim(current.id, current.token_version, ownerId, claimTime,
+      const claim = await this.store.acquireTokenRefreshClaim(current.id, current.token_version, ownerId, claimTime,
         new Date(claimTime.getTime() + 10_000));
       if (claim === 'newer_tokens') {
-        const newer = this.store.getConnection(connection.tenant_id, connection.id);
+        const newer = await this.store.getConnection(connection.tenant_id, connection.id);
         if (newer?.status === 'active' && newer.token_version > current.token_version) {
           return decrypt(newer.access_token_ciphertext, this.config.encryptionKey);
         }
         throw new BufferError('Newer Buffer credentials are unavailable; reauthorization is required', 'auth');
       }
       if (claim === 'expired_uncertain') {
-        this.store.requireReauthIfVersion(current.id, current.token_version);
+        await this.store.requireReauthIfVersion(current.id, current.token_version);
         throw new BufferError('A prior token refresh may have consumed the single-use token; automatic replay is disabled', 'auth');
       }
       if (claim !== 'acquired') {
         const deadline = Date.now() + this.config.requestTimeoutMs + 5_000;
         while (Date.now() < deadline) {
           await new Promise((resolve) => setTimeout(resolve, 10));
-          const newer = this.store.getConnection(connection.tenant_id, connection.id);
+          const newer = await this.store.getConnection(connection.tenant_id, connection.id);
           if (!newer) throw new BufferError('Connection no longer exists', 'auth');
           if (newer.token_version > current.token_version) {
             if (newer.status !== 'active') throw new BufferError('Buffer reauthorization is required', 'auth');
@@ -175,7 +175,7 @@ export class BufferClient {
         throw new BufferError('Another process is refreshing this connection; no second token request was sent', 'auth');
       }
       const requestTime = new Date();
-      if (!this.store.startTokenRefresh(current.id, current.token_version, ownerId, requestTime,
+      if (!await this.store.startTokenRefresh(current.id, current.token_version, ownerId, requestTime,
         new Date(requestTime.getTime() + this.config.requestTimeoutMs + 5_000))) {
         throw new BufferError('Token refresh claim was lost before the request; no token request was sent', 'auth');
       }
@@ -186,11 +186,11 @@ export class BufferClient {
           refresh_token: decrypt(current.refresh_token_ciphertext!, this.config.encryptionKey),
         }), this.fetcher, 'BufferTokenRefresh');
         if (!tokens.refresh_token) throw new BufferError('Refresh response omitted the required rotated refresh token', 'invalid_response');
-        const saved = this.store.commitTokenRefresh({ connectionId: current.id, expectedVersion: current.token_version, ownerId,
+        const saved = await this.store.commitTokenRefresh({ connectionId: current.id, expectedVersion: current.token_version, ownerId,
           access: encrypt(tokens.access_token, this.config.encryptionKey), refresh: encrypt(tokens.refresh_token, this.config.encryptionKey),
           expiresAt: new Date(Date.now() + tokens.expires_in * 1000).toISOString(), scopes: tokens.scope });
         if (!saved) {
-          const newer = this.store.getConnection(connection.tenant_id, connection.id);
+          const newer = await this.store.getConnection(connection.tenant_id, connection.id);
           if (newer?.status === 'active' && newer.token_version > current.token_version) {
             return decrypt(newer.access_token_ciphertext, this.config.encryptionKey);
           }
@@ -198,7 +198,7 @@ export class BufferClient {
         }
         return tokens.access_token;
       } catch (error) {
-        this.store.markTokenRefreshAmbiguous(current.id, current.token_version, ownerId);
+        await this.store.markTokenRefreshAmbiguous(current.id, current.token_version, ownerId);
         throw error;
       }
     })().finally(() => refreshes.delete(connection.id));
@@ -241,14 +241,14 @@ export class BufferClient {
   }
 
   async graphql<T>(tenantId: string, connectionId: string, query: string, variables: Record<string, unknown> = {}): Promise<GqlResult<T>> {
-    let connection = this.store.getConnection(tenantId, connectionId);
+    let connection = await this.store.getConnection(tenantId, connectionId);
     if (!connection) throw new BufferError('Connection not found for this tenant', 'auth');
     let token = await this.accessToken(connection);
     try {
       return await this.rawGraphql<T>(token, query, variables);
     } catch (error) {
       if (!(error instanceof BufferError) || error.kind !== 'auth') throw error;
-      connection = this.store.getConnection(tenantId, connectionId);
+      connection = await this.store.getConnection(tenantId, connectionId);
       if (!connection) throw error;
       token = await this.refresh(connection, true);
       return this.rawGraphql<T>(token, query, variables);
@@ -281,11 +281,11 @@ export class BufferClient {
         after = pageResult.data.posts.pageInfo.hasNextPage ? pageResult.data.posts.pageInfo.endCursor : null;
         if (pageResult.data.posts.pageInfo.hasNextPage && !after) throw new BufferError('Pagination said another page exists but omitted endCursor', 'invalid_response');
       } while (after);
-      this.store.replacePosts(tenantId, connectionId, org.id, organizationPosts);
+      await this.store.replacePosts(tenantId, connectionId, org.id, organizationPosts);
     }
-    this.store.removePostsOutsideOrganizations(tenantId, connectionId, organizations.map((organization) => organization.id));
-    this.store.replaceDiscovery(tenantId, connectionId, organizations);
-    this.store.addEvidence({ id: randomUUID(), tenantId, operation: 'account_channel_post_discovery', outcome: 'success', sanitized: {
+    await this.store.removePostsOutsideOrganizations(tenantId, connectionId, organizations.map((organization) => organization.id));
+    await this.store.replaceDiscovery(tenantId, connectionId, organizations);
+    await this.store.addEvidence({ id: randomUUID(), tenantId, operation: 'account_channel_post_discovery', outcome: 'success', sanitized: {
       organizationCount: organizations.length, channelCount: organizations.reduce((n, o) => n + o.channels.length, 0), postCount: allPosts.length,
     }});
     return { organizations, posts: allPosts };
