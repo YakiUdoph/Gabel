@@ -908,3 +908,45 @@ Created: 2026-11-02. This is the first task record found in the repository and d
 - [ ] Complete interactive production Buffer OAuth and a genuine read-only scheduled-post retrieval. Stop for the account owner.
 - [ ] Create or edit a real disposable Buffer post only under separate explicit authorization.
 - [ ] Complete manual assistive-technology/accessibility review and qualified legal review before a compliance PASS claim.
+
+## Urgent production Buffer OAuth diagnosis — 2026-11-13
+
+- [x] Re-read the governance, compliance, current deployment, and OAuth/session persistence implementation before diagnosis.
+- [x] Confirm production is serving commit `708a6a2` from the existing Vercel project and that required OAuth/database variables are present in the production scope without exposing their values.
+- [x] Verify the production authorization request uses Buffer's documented endpoint and parameters, the intended client ID, S256 PKCE, and exactly `https://gabel-six.vercel.app/auth/buffer/callback`.
+- [x] Reproduce a safe provider-denial callback with the same production browser session; confirm durable state survives the Vercel round trip, the denial is recognized, and replay is rejected as single-use.
+- [x] Confirm Secure, HttpOnly session and SameSite=Lax attributes remain present and compatible with Buffer's top-level GET callback.
+- [x] Classify Buffer's pre-consent rejection cause as **UNKNOWN pending inspection of the registered Buffer app client**. The leading evidence-based cause is a character-for-character redirect-registration mismatch; production request/session/state behavior is verified and no token exchange was reached.
+- [ ] Account owner: in Buffer Settings → API, verify that the same client ID permits the requested scopes and register exactly `https://gabel-six.vercel.app/auth/buffer/callback`; then start one fresh Gabel Connect Buffer flow. Do not reuse the rejected callback URL.
+- [x] Make no OAuth-security bypass, secret change, database replacement, Buffer mutation, or production deployment; no code defect requiring deployment was confirmed.
+
+## Final Buffer OAuth request investigation — 2026-11-13
+
+- [x] Accept the account owner's verified evidence that the exact production callback and the three selectable resource permissions are already present; do not repeat redirect mismatch as the cause.
+- [x] Compare the live production authorization request parameter-by-parameter with Buffer's current official OAuth documentation.
+- [x] Confirm `offline_access` is a supported OAuth scope inside the space-separated `scope` parameter, not a separate authorization parameter or dashboard-selectable resource permission.
+- [x] Confirm the production endpoint, `response_type=code`, state, S256 PKCE challenge, consent prompt, redirect URI, and scope encoding match Buffer's documented example and contain no unsupported parameter.
+- [x] Confirm the production client ID equals the repository's configured app-client ID without printing either value. Equality with the private dashboard app remains **UNKNOWN** because its client ID was not available to this environment.
+- [x] Add focused regression coverage for the complete documented authorization request, including the `offline_access` scope.
+- [x] Run typecheck, the 15-test focused OAuth/security selection, and the complete 81-test unit/security suite successfully.
+- [x] Make no runtime correction or deployment because no unsupported request construction was found. Keep PKCE and state validation unchanged.
+- [ ] Account owner: privately compare the dashboard app's client ID with the configured client ID, then capture Buffer's failing authorization response/error metadata or contact Buffer developer support if they match. Do not paste the client ID or secret into chat.
+
+## Final live Buffer sync verification — 2026-11-13
+
+- [x] Trace production `POST /sync` through CSRF/session validation, tenant connection lookup, Buffer discovery, PostgreSQL replacement, sanitized success evidence, and the 303 workspace redirect.
+- [x] Confirm Buffer transport, HTTP, authorization, GraphQL, partial-response, invalid-response, pagination, and refresh failures throw before the redirect and are not converted into an empty queue.
+- [x] Classify the observed one-channel/zero-post workspace as a successful empty scheduled queue from Buffer, supported by the completed 303 path and persisted aggregate result.
+- [x] Run focused refresh/transport/GraphQL/discovery tests (10/10), typecheck, and `git diff --check` successfully.
+- [x] Make no code or production change and perform no Buffer mutation; no defect requiring deployment was confirmed.
+- [ ] For a fresh end-to-end demo, create a disposable scheduled image post only under separate explicit authorization, rerun Refresh from Buffer, then follow the existing exact review/approval/verification and separately authorized cleanup gates.
+
+## Supplied logo integration — 2026-11-13
+
+- [x] Verify `public/gabel-logo.png` is a genuine 1,312 × 1,199, 8-bit RGBA PNG with transparency and sufficient source resolution.
+- [x] Replace the placeholder navigation mark with the supplied logo while preserving the Gabel wordmark and tagline.
+- [x] Add the supplied logo as the PNG favicon and permit only same-origin images in the existing content security policy.
+- [x] Serve the exact PNG through the shared Node request handler for deterministic local and Vercel rewrite behavior, including GET/HEAD handling and correct MIME/length headers.
+- [x] Add focused regression coverage for file identity, dimensions, transparency, navigation markup, proportional CSS, favicon metadata, CSP, and the asset route.
+- [x] Run typecheck, unit/security tests, isolated integration tests, and the real Chromium desktop/mobile fixture flow; inspect the corrected renders without changing application behavior.
+- [ ] Confirm the pushed commit reaches READY on the existing Vercel project and verify the live homepage, workspace, logo asset, favicon metadata, and mobile navigation.

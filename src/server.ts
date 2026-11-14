@@ -20,6 +20,7 @@ import { ReplacementValidationError } from './replacement-validation.ts';
 import { PublicError } from './errors.ts';
 
 const config = loadConfig();
+const gabelLogo = readFileSync(new URL('../public/gabel-logo.png', import.meta.url));
 const isVercel = Boolean(process.env.VERCEL);
 if (!isVercel && (!config.tlsKeyPath || !config.tlsCertPath)) throw new Error('TLS_KEY_PATH and TLS_CERT_PATH are required because Buffer requires HTTPS redirect URIs');
 const store: AppStore = isVercel ? new PostgresStore(config.databaseUrl!) : new Store(config.databasePath);
@@ -92,7 +93,7 @@ function page(title: string, body: string): string {
 }
 
 function html(res: ServerResponse, status: number, content: string): void {
-  res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer', 'permissions-policy': 'camera=(), microphone=(), geolocation=()', 'cross-origin-opener-policy': 'same-origin', ...(process.env.NODE_ENV === 'production' ? { 'strict-transport-security': 'max-age=31536000' } : {}), 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://auth.buffer.com; base-uri 'none'; frame-ancestors 'none'" });
+  res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer', 'permissions-policy': 'camera=(), microphone=(), geolocation=()', 'cross-origin-opener-policy': 'same-origin', ...(process.env.NODE_ENV === 'production' ? { 'strict-transport-security': 'max-age=31536000' } : {}), 'content-security-policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self' https://auth.buffer.com; base-uri 'none'; frame-ancestors 'none'" });
   res.end(content);
 }
 
@@ -299,6 +300,13 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
   if (isVercel && rewrittenPath !== null) {
     url.pathname = `/${rewrittenPath.replace(/^\/+/, '')}`;
     url.searchParams.delete('__gabel_path');
+  }
+  if (url.pathname === '/gabel-logo.png') {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.writeHead(405, { allow: 'GET, HEAD', 'cache-control': 'no-store' }); res.end(); return;
+    }
+    res.writeHead(200, { 'content-type': 'image/png', 'content-length': gabelLogo.length, 'cache-control': 'public, max-age=3600', 'x-content-type-options': 'nosniff' });
+    res.end(req.method === 'HEAD' ? undefined : gabelLogo); return;
   }
   if (req.method === 'GET' && url.pathname === '/health/live') {
     json(res, 200, { status: 'ok' }); return;
