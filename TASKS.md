@@ -950,3 +950,14 @@ Created: 2026-11-02. This is the first task record found in the repository and d
 - [x] Add focused regression coverage for file identity, dimensions, transparency, navigation markup, proportional CSS, favicon metadata, CSP, and the asset route.
 - [x] Run typecheck, unit/security tests, isolated integration tests, and the real Chromium desktop/mobile fixture flow; inspect the corrected renders without changing application behavior.
 - [x] Confirm the pushed commit reaches READY on the existing Vercel project and verify the live homepage, workspace, logo asset, favicon metadata, and mobile navigation.
+
+## Judge-facing README rebuild — 2026-11-14
+
+- [x] Re-read repository governance, current phase, compliance, deployment, Buffer integration, judge, and release-evidence documents before editing.
+- [x] Replace the long technical README with a concise judge path: brand, required tagline, two-sentence product explanation, genuine rendered interface, prominent test link, workflow, capabilities, live/source links, evidence, stack, safeguards, limitations, and technical-document links.
+- [x] Preserve the full hosted and local instructions in `docs/HOW-TO-TEST.md`, including prerequisites, read-only-first flow, exact approval boundary, result labels, failure cases, cleanup, and known limitations.
+- [x] Reconcile the release claim: production OAuth and an authentic empty scheduled-queue sync are verified; a currently reproducible live repair remains blocked because no shared account or disposable judge post exists.
+- [x] Recheck the current Vercel production deployment, public alias, landing page, liveness, readiness, logo response, and a recent bounded runtime-log window without changing deployment state.
+- [x] Verify all new relative Markdown/image links, the selected 1,440 × 900 PNG, `git diff --check`, typecheck, 82/82 unit/security tests, and 5/5 SQLite integration tests; record the Neon integration as skipped because `DATABASE_URL` is not configured.
+- [x] Modify no application code, API, database, authentication, or deployment; perform no Buffer or Cloudflare mutation.
+- [ ] A fresh end-to-end judge repair still requires a separately authorized disposable scheduled image post, controlled failure evidence, exact edit approval, fresh preservation proof, and separately authorized cleanup.

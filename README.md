@@ -1,142 +1,92 @@
-# How to test
+<p align="center">
+  <img src="public/gabel-logo.png" width="104" alt="Gabel logo">
+</p>
 
-Gabel finds externally hosted media that may have become unavailable after a Buffer API post was scheduled. It lets the user check the media, review a replacement, and approve an asset-only edit without intentionally changing the post's text, channel, or scheduled time.
+<h1 align="center">Gabel</h1>
 
-Gabel is a proof-stage Buffer Commit 2026 project. It uses genuine Buffer data and has no seeded demo account or fake posts. The public application is [https://gabel-six.vercel.app](https://gabel-six.vercel.app), backed by Vercel Functions and durable Neon PostgreSQL. One controlled disposable-post repair was verified live on November 8, 2026, then the post was deleted and the controlled media fixture was restored. There is no seeded judge account or reusable disposable post.
+<p align="center"><strong>Check before it goes live.</strong></p>
 
-## Start here
+Gabel helps developers, creators, and small publishing teams catch an externally hosted image that has become unavailable after a Buffer API post was scheduled. It turns that fragile gap into a guarded workflow: inspect the evidence, approve one precise replacement, and verify that Buffer preserved the post around it.
 
-You can inspect media without changing a Buffer post. Preparing a replacement also sends no mutation. A live edit happens only after a second step in which the user types an exact confirmation phrase.
+![Gabel showing a confirmed media problem and its recorded evidence](docs/screenshots/final-product-experience/04-problem-desktop.png)
 
-### Route A: Judge / hosted application
+<sub>Real Gabel interface captured from the application’s browser test. The post and HTTP 404 shown here are explicitly labeled local fixtures—not a live Buffer repair claim.</sub>
 
-**Current status: public application available.** Open [https://gabel-six.vercel.app](https://gabel-six.vercel.app). The landing page and empty workspace are publicly verifiable. Genuine Buffer data requires the evaluator to authorize an account they control. No demo credentials or disposable test post are provided.
+## How to test
 
-When a hosted application is available, the route will require:
+The safest judge path is read-only: open the hosted app, connect a Buffer account you control, refresh the queue, and choose **Check media accessibility** on a scheduled media post. Checking media and preparing a replacement do not edit Buffer; a mutation requires a separate post-specific confirmation.
 
-- a Buffer account that you are authorized to use;
-- a connected Buffer channel;
-- a scheduled post with externally hosted media; and
-- for repair testing, a disposable scheduled **X image post** that is safe to edit.
+**[Open the complete judge and developer testing guide →](docs/HOW-TO-TEST.md)**
 
-Do not test repair on an important post. The read-only media check is the safe first test:
+> Do not test repair on an important post. There is no shared demo account or disposable judge post; stop after the read-only check unless you control a disposable scheduled X image post and explicitly approve the exact edit.
 
-1. Open [https://gabel-six.vercel.app](https://gabel-six.vercel.app).
-2. Select **Connect Buffer** and approve `account:read`, `posts:read`, `posts:write`, and `offline_access`. Gabel needs write access for the optional repair step; checking media does not edit the post.
-3. Select **Refresh from Buffer**.
-4. Find a scheduled post with media and select **Check media accessibility**. Gabel fetches the post again and checks up to ten assets without displaying their URLs.
-5. Read the result:
-   - **CONFIRMED PROBLEM** — the media server returned an unsuccessful HTTP response such as 404.
-   - **COULD NOT VERIFY** — Gabel could not complete a safe network check. This does not prove that the file is unavailable.
-   - **UNSUPPORTED FILE** — the server responded, but the reported and detected file types did not pass Gabel's checks.
-   - **READY** — the bounded checks passed now. This does not guarantee that the complete file is valid or that it will remain available until publication.
+## Detect → Review → Verify
 
-Stop here for a read-only evaluation. To test repair, use only a disposable scheduled X post that you control:
-
-6. Supply a stable, direct, unauthenticated public HTTPS JPEG or PNG. The current repair gate accepts X image replacements only, up to 5 MB and 8192 by 8192 pixels. Do not use a signed, private, or expiring URL.
-7. Open a post with a fresh **CONFIRMED PROBLEM**, enter the direct replacement URL, and select **Validate image and review change**. This validates the destination, response, MIME type, file signature, size, dimensions, and current Buffer media-format support. It does not edit Buffer.
-8. Review the confirmed original failure, validated replacement properties, protected fields, and technical fingerprints. The one-time review expires after ten minutes.
-9. Only if the change is correct and the post is disposable, type the displayed `EDIT POST <post-id>` phrase and submit it. This step sends the Buffer mutation.
-10. Gabel fetches the post and replacement again immediately before the edit. After Buffer responds, Gabel fetches the post once more and compares the media, text, channel, and scheduling fields. It reports an uncertain or mismatched result as ambiguous rather than as success.
-11. Open **Account** to disconnect. Type `DISCONNECT BUFFER` to delete Gabel's encrypted Buffer credentials and cached connection data. Revoke Gabel in Buffer settings as well if you want Buffer to invalidate the grant. `DELETE GABEL DATA` removes the browser account and its local Gabel records; neither action deletes Buffer posts.
-
-The repository has live evidence for Buffer account, organization, channel, scheduled-post, asset, schema, read-only media operations, and one explicitly approved assets-only `editPost` followed by a fresh zero-discrepancy preservation comparison. That controlled post was deleted afterward, so the result is evidence—not a currently reproducible judge sandbox. See [JUDGE.md](JUDGE.md) for the evaluation guide and remaining blockers.
-
-### Route B: Developer / local testing
-
-#### Prerequisites
-
-- Node.js 24 or newer.
-- A Buffer account and a registered Buffer OAuth app client.
-- The exact callback `https://localhost:3443/auth/buffer/callback` registered for local use, or matching values if you change the host or port. Buffer requires HTTPS even on localhost and compares redirect URIs exactly.
-- A local TLS certificate and private key in PEM format.
-- For live read testing, a connected Buffer channel and a scheduled post with externally hosted media.
-- For live repair testing, a separate disposable scheduled X image post and explicit approval of the exact change.
-
-Never put real credentials in source files, command output, fixtures, or documentation.
-
-#### Install and configure
-
-The commands below use `npm.cmd`, which works in Windows PowerShell without depending on a PowerShell script-execution policy. In other shells, the equivalent command is `npm`.
-
-```powershell
-npm.cmd ci
-Copy-Item -LiteralPath .env.example -Destination .env
-```
-
-Edit the Git-ignored `.env` file. Keep the names and paths from `.env.example`:
-
-- `APP_ORIGIN` and `PORT` define the local HTTPS origin.
-- `BUFFER_CLIENT_ID` is required. Set `BUFFER_CLIENT_SECRET` for a confidential Buffer client; the implementation also supports a registered public client that uses PKCE without a secret.
-- `BUFFER_REDIRECT_URI` must match the URI registered with Buffer character for character.
-- `APP_ENCRYPTION_KEY` and `APP_COOKIE_SECRET` must be different random 32-byte base64url values. Generate each value separately with the command already documented in `.env.example`.
-- `TLS_KEY_PATH` and `TLS_CERT_PATH` must point to the PEM key and certificate. The repository does not install a certificate tool; create a locally trusted certificate with a tool approved for your environment.
-- `OPERATOR_NAME`, `SUPPORT_EMAIL`, and `PRIVACY_EMAIL` must contain truthful local/deployment values. Gabel refuses to start when they are blank.
-- `DATABASE_PATH` defaults to `./data/gabel.db`. The database is created on first start.
-
-Start the HTTPS application:
-
-```powershell
-npm.cmd start
-```
-
-Open `https://localhost:3443/`, or the exact `APP_ORIGIN` you configured. The public product page is `/`; select **Open workspace** or go directly to `/workspace` for the Buffer workflow. Your browser must trust the local certificate before the Buffer callback can complete normally.
-
-For development with automatic restart:
-
-```powershell
-npm.cmd run dev
-```
-
-Run the available checks:
-
-```powershell
-npm.cmd run typecheck
-npm.cmd test
-npm.cmd run integration
-npm.cmd run integration:postgres
-npm.cmd run browser
-```
-
-There is no lint script in `package.json`, so no lint command or result is claimed.
-
-For an approved production deployment, follow [docs/PRODUCTION-DEPLOYMENT.md](docs/PRODUCTION-DEPLOYMENT.md). The `npm.cmd run production:check` preflight requires the real `NODE_ENV=production` configuration, public hostname, matching TLS certificate, truthful contacts, and persistent database; it is not expected to pass with the local example environment.
-
-## Evidence status
-
-| Classification | Current evidence |
+| Step | What happens |
 |---|---|
-| Implemented | Buffer OAuth with PKCE, encrypted server-side tokens, scheduled-post retrieval, bounded media checks, X JPEG/PNG replacement validation, explicit single-use approval, stale-state checks, assets-only editing, fresh after-read comparison, disconnect, deletion, and retention controls. |
-| Verified with the live Buffer API | Account, organization, channel, scheduled post, image asset, update capability, schema/media-format reads, and sanitized read-only media evidence. |
-| Verified by automated tests | OAuth and token handling, tenant isolation, media safety, replacement rules, asset ordering and preservation, exact approval, stale-state rejection, ambiguity handling, deletion, retention, and structural accessibility checks. Mocked Buffer tests are not live evidence. |
-| Verified with a controlled live mutation | One receipt-bound disposable X image post completed DETECT → REPAIR → VERIFY on November 8, 2026: HTTP 410 detection, validated replacement, exact approval, one assets-only `editPost`, and a fresh zero-discrepancy preservation comparison. Cleanup and fixture restoration were separately authorized and verified. |
-| Verified in production | Public landing/workspace routing, readiness, security headers, managed PostgreSQL persistence across instances, OAuth initiation with PKCE, and exact callback configuration. |
-| Blocked | Fresh interactive production Buffer authorization and a currently authorized disposable repair demonstration. No judge credentials or disposable post are provided. |
-| Planned, not implemented | Background monitoring, automatic repair, bulk editing, and support for replacement workflows beyond the current X JPEG/PNG image path. |
+| **Detect** | Gabel retrieves genuine scheduled posts and performs a fresh, bounded check without exposing media URLs in the result. |
+| **Review** | For a supported X image post, Gabel validates a direct public JPEG or PNG and shows the affected position, evidence, and fields that must remain unchanged. Nothing is edited yet. |
+| **Verify** | After exact typed approval, Gabel refetches before mutation, sends the complete approved asset list, refetches again, and reports success only when protected fields match. |
 
-## How Gabel protects a repair
+This is the locked **DETECT → REPAIR → VERIFY** product flow. Review and explicit approval are the safety boundary before repair.
 
-Gabel keeps Buffer credentials on the server and encrypts them at rest. Every user-owned record is scoped to a random browser tenant. Media checks allow only public HTTPS destinations, validate resolved addresses, pin a validated address for the connection, and recheck redirects. They inspect no more than a 64 KiB prefix for format and dimensions and never show the source URL in results.
+## What Gabel actually does
 
-Preparing an edit builds the complete ordered asset list and records the current post state. Confirmation is single-use and requires the exact post-specific phrase. Immediately before editing, Gabel fetches the post again and revalidates the replacement; any stale post, stale validation, or changed replacement stops the operation. It sends only `id` and `assets`, then fetches the post again to compare protected fields. It never automatically retries an uncertain mutation.
+- Connects to Buffer through OAuth Authorization Code flow with PKCE.
+- Retrieves authorized organizations, channels, and cursor-paginated scheduled posts.
+- Labels bounded media checks as **CONFIRMED PROBLEM**, **COULD NOT VERIFY**, **UNSUPPORTED FILE**, or **READY**.
+- Supports a narrow repair path: JPEG or PNG replacements on scheduled X image posts.
+- Requires a fresh confirmed failure, a short-lived review, and an exact one-time confirmation before `editPost`.
+- Compares the fresh after-state with the approved assets and protected copy, channel, schedule, status, metadata, tags, and media order.
+- Keeps uncertain mutation or verification outcomes ambiguous instead of presenting them as success.
 
-## Repository map
+## Live application and source
 
-- `src/server.ts` — HTTPS routes, the server-rendered interface, OAuth callback, media check, edit review, account controls, and evidence page.
-- `src/buffer.ts` — Buffer OAuth token exchange/rotation and GraphQL transport.
-- `src/media-security.ts` — bounded HTTPS media probing and SSRF protections.
-- `src/replacement-validation.ts` — current X JPEG/PNG replacement requirements and fresh-evidence checks.
-- `src/edit.ts` — complete asset construction, approval, mutation, and verification.
-- `src/controlled-test-post.ts` and `scripts/controlled-buffer-post.ts` — local, receipt-bound disposable-post creation/inspection/cleanup tooling; it is not an application endpoint. It was used in controlled live runs and now accepts cleanup only for the signed original state or one uniquely completed, verified Gabel repair state.
-- `src/db.ts` — tenant-scoped SQLite persistence, deletion, and retention.
-- `test/` — automated tests; mocked responses are never presented as live Buffer evidence.
-- `docs/BUFFER-LIVE-INTEGRATION-REPORT.md` — sanitized live/read evidence.
-- `docs/CONTROLLED-E2E-REPAIR-TEST-PLAN.md` — the unexecuted controlled repair plan and authorization points.
-- `docs/CONTROLLED-BUFFER-POST-LIFECYCLE.md` — the separately authorized operator lifecycle and cleanup recovery procedure.
-- `tooling/cloudflare-workers-media/` — an undeployed Workers Free bundled-static-assets fixture with project-generated test images and separately deployable available/revoked states.
-- `docs/COMPETITIVE-VALIDATION-AND-SERIAL-WINNER-SCORE.md` — current product validation and judgeability assessment.
-- `docs/PRODUCTION-DEPLOYMENT.md` — single-replica build, fail-closed preflight, persistent SQLite, health, backup, logging, rollback, and read-only verification procedure.
+- **Application:** [gabel-six.vercel.app](https://gabel-six.vercel.app)
+- **Workspace:** [gabel-six.vercel.app/workspace](https://gabel-six.vercel.app/workspace)
+- **Source:** [github.com/YakiUdoph/Gabel](https://github.com/YakiUdoph/Gabel)
+- **Judge guide:** [JUDGE.md](JUDGE.md)
 
-## Release status
+The production deployment was rechecked on November 14, 2026: the current `main` deployment is `READY`, the public alias serves the landing page, and liveness/readiness return HTTP 200. `READY` is deployment evidence, not a compliance certification or proof that a judge can reproduce a repair today.
 
-The current compliance report is [docs/COMPLIANCE-PRIVACY-SECURITY-ACCESSIBILITY-GATE.md](docs/COMPLIANCE-PRIVACY-SECURITY-ACCESSIBILITY-GATE.md), with the latest production execution record in [docs/PRODUCTION-DEPLOYMENT.md](docs/PRODUCTION-DEPLOYMENT.md). Production compliance remains **FAILED**. Application-level production validation, health checks, safe logging, graceful shutdown, schema readiness, inactivity deletion, automated browser/accessibility checks, and a repeatable container procedure are implemented, but public release is still blocked by verified production contacts, qualified legal review, manual assistive-technology testing, an approved public deployment, judge reproduction, and operator infrastructure evidence. Do not treat this repository as a production certification or competition-ready deployment.
+## Verified Buffer integration and evidence
+
+| Classification | Evidence |
+|---|---|
+| **Verified live** | OAuth-backed Buffer account, organization, channel, scheduled-post, asset, capability, schema/media-format, and read-only media operations. Production OAuth plus one authentic empty scheduled-queue sync were verified on November 13, 2026. |
+| **Verified live once, not currently reproducible** | On November 8, 2026, one authorized disposable X image post completed confirmed HTTP 410 detection, replacement validation, exact approval, one assets-only `editPost`, and a fresh zero-discrepancy preservation comparison. The post was then deleted and the controlled fixture restored under separate approvals. |
+| **Automated** | The current local suite passes 82 unit/security tests and 5 SQLite integration tests; the Neon integration is skipped when `DATABASE_URL` is not configured. Mocked Buffer behavior is never counted as live evidence. |
+| **Production** | Vercel Functions, durable Neon PostgreSQL, public routes, security headers, OAuth initiation/callback boundaries, and managed persistence have deployment evidence. |
+| **Blocked / unknown** | No shared account or disposable post exists for a judge to reproduce the mutation. User demand, failure frequency, willingness to pay, manual assistive-technology results, and qualified legal conclusions remain unverified. |
+
+Buffer’s official documentation confirms the underlying boundary: API media uses direct public URLs and must remain reachable until publication; Buffer may fetch scheduled media hours or days later. It also documents PKCE OAuth, `offline_access`, scheduled-post reads, ordered assets, and `editPost`: [hosting media](https://developers.buffer.com/guides/hosting-media), [authentication](https://developers.buffer.com/guides/authentication), and [API reference](https://developers.buffer.com/reference.html).
+
+See the sanitized [live integration report](docs/BUFFER-LIVE-INTEGRATION-REPORT.md) and [controlled repair plan](docs/CONTROLLED-E2E-REPAIR-TEST-PLAN.md) for the full evidence boundary.
+
+## Tech stack
+
+- Node.js 24 and TypeScript
+- Server-rendered HTML and CSS; no client framework
+- Buffer GraphQL API and OAuth 2.0 with PKCE
+- Vercel Node.js Functions in production
+- Neon PostgreSQL in production; SQLite for local/Docker operation
+- Node’s built-in test runner and a real Chromium browser harness
+
+## Security and limitations
+
+Buffer credentials stay server-side and are encrypted at rest. Tenant scoping, CSRF protection, single-use edit claims, token-refresh fencing, public-HTTPS media policy, DNS/IP validation, redirect revalidation, bounded response inspection, retention cleanup, account deletion, and fresh before/after verification are implemented and tested within the documented scope.
+
+Gabel does **not** guarantee future media availability, full-file integrity, publication by Buffer, or acceptance by a social platform. Checks inspect at most ten assets and a 64 KiB prefix per response; repair currently supports scheduled X JPEG/PNG images only; there is no background monitoring, automatic repair, bulk edit, or automatic mutation retry. Production compliance remains **FAILED** pending manual accessibility testing, qualified legal review, and remaining operational review—see the [compliance gate](docs/COMPLIANCE-PRIVACY-SECURITY-ACCESSIBILITY-GATE.md).
+
+## Technical documentation
+
+- [How to test Gabel](docs/HOW-TO-TEST.md)
+- [Judge evaluation guide](JUDGE.md)
+- [Architecture](ARCHITECTURE.md)
+- [Buffer live integration report](docs/BUFFER-LIVE-INTEGRATION-REPORT.md)
+- [Controlled repair test plan](docs/CONTROLLED-E2E-REPAIR-TEST-PLAN.md)
+- [Production deployment evidence and procedure](docs/PRODUCTION-DEPLOYMENT.md)
+- [Compliance, privacy, security, and accessibility gate](docs/COMPLIANCE-PRIVACY-SECURITY-ACCESSIBILITY-GATE.md)
+- [Accessibility test results](docs/ACCESSIBILITY-TEST-RESULTS.md)
+- [Data inventory and retention](docs/DATA-INVENTORY-AND-RETENTION.md)
+- [Competitive validation and Serial Winner Score](docs/COMPETITIVE-VALIDATION-AND-SERIAL-WINNER-SCORE.md)
