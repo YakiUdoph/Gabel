@@ -949,4 +949,4 @@ Created: 2026-11-02. This is the first task record found in the repository and d
 - [x] Serve the exact PNG through the shared Node request handler for deterministic local and Vercel rewrite behavior, including GET/HEAD handling and correct MIME/length headers.
 - [x] Add focused regression coverage for file identity, dimensions, transparency, navigation markup, proportional CSS, favicon metadata, CSP, and the asset route.
 - [x] Run typecheck, unit/security tests, isolated integration tests, and the real Chromium desktop/mobile fixture flow; inspect the corrected renders without changing application behavior.
-- [ ] Confirm the pushed commit reaches READY on the existing Vercel project and verify the live homepage, workspace, logo asset, favicon metadata, and mobile navigation.
+- [x] Confirm the pushed commit reaches READY on the existing Vercel project and verify the live homepage, workspace, logo asset, favicon metadata, and mobile navigation.
